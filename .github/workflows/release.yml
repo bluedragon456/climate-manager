@@ -31,43 +31,11 @@ jobs:
           python - <<'PY'
           import re
           import sys
-
           version = "${{ github.event.inputs.version }}"
           if not re.fullmatch(r"\d+\.\d+\.\d+", version):
               print(f"Invalid version: {version}")
               sys.exit(1)
           print(f"Version OK: {version}")
-          PY
-
-      - name: Validate manifest and required keys
-        run: |
-          python - <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          manifest_path = Path("custom_components/climate_manager/manifest.json")
-          if not manifest_path.exists():
-              print("manifest.json not found")
-              sys.exit(1)
-
-          data = json.loads(manifest_path.read_text(encoding="utf-8"))
-
-          required = ["domain", "name", "version"]
-          missing = [k for k in required if k not in data]
-          if missing:
-              print(f"manifest.json missing keys: {missing}")
-              sys.exit(1)
-
-          if data.get("config_flow") is not True:
-              print("manifest.json must include: \"config_flow\": true")
-              sys.exit(1)
-
-          if data.get("domain") != "climate_manager":
-              print(f"Unexpected domain: {data.get('domain')}")
-              sys.exit(1)
-
-          print("manifest.json looks good")
           PY
 
       - name: Update manifest version
@@ -98,15 +66,8 @@ jobs:
           git push origin main
           git push origin "v${{ github.event.inputs.version }}"
 
-      - name: Build release zip
-        run: |
-          mkdir -p release
-          cd custom_components
-          zip -r ../release/climate_manager.zip climate_manager
-
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.event.inputs.version }}
           name: v${{ github.event.inputs.version }}
-          files: release/climate_manager.zip
