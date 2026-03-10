@@ -45,13 +45,3 @@ Then restart Home Assistant and add the integration from **Settings → Devices 
 - Window/door sensor: `binary_sensor.window_door_open`
 - Season source: `input_text.season_mode_state`
 
-## Release process
-
-This repo includes a GitHub Actions workflow that can:
-
-- update the integration version in `manifest.json`
-- create a git tag
-- build a release zip
-- publish a GitHub release
-
-Run the **Release** workflow from the Actions tab and enter a version like `1.0.0`.
