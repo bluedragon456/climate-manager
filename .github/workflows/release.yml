@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version number to release, for example 1.0.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate version input
+        run: |
+          python - <<'PY'
+          import re
+          import sys
+          version = '${{ github.event.inputs.version }}'.strip()
+          if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+              print(f'Invalid version: {version}')
+              sys.exit(1)
+          PY
+
+      - name: Update manifest version
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          version = '${{ github.event.inputs.version }}'.strip()
+          manifest_path = Path('custom_components/climate_manager/manifest.json')
+          data = json.loads(manifest_path.read_text())
+          data['version'] = version
+          manifest_path.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+
+      - name: Commit version bump
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add custom_components/climate_manager/manifest.json
+          git commit -m "Release v${{ github.event.inputs.version }}" || echo "No changes to commit"
+          git tag "v${{ github.event.inputs.version }}"
+          git push origin HEAD
+          git push origin "v${{ github.event.inputs.version }}"
+
+      - name: Build release zip
+        run: |
+          mkdir -p dist
+          zip -r "dist/climate_manager.zip" custom_components README.md LICENSE hacs.json
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          name: v${{ github.event.inputs.version }}
+          files: dist/climate_manager.zip
+          generate_release_notes: true

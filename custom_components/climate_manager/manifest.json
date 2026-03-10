@@ -1,0 +1,15 @@
+{
+  "domain": "climate_manager",
+  "name": "Climate Manager",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/bluedragon456/climate-manager",
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "loggers": [
+    "custom_components.climate_manager"
+  ],
+  "requirements": [],
+  "version": "0.1.0",
+  "issue_tracker": "https://github.com/bluedragon456/climate-manager/issues"
+}

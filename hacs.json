@@ -1,0 +1,9 @@
+{
+  "name": "Climate Manager",
+  "content_in_root": false,
+  "homeassistant": "2024.6.0",
+  "zip_release": true,
+  "filename": "climate_manager.zip",
+  "render_readme": true,
+  "domains": ["climate"]
+}

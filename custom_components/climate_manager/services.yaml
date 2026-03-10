@@ -1,0 +1,55 @@
+recalculate:
+  fields:
+    entry_id:
+      required: true
+      example: abc123
+      selector:
+        text:
+clear_override:
+  fields:
+    entry_id:
+      required: true
+      selector:
+        text:
+pause:
+  fields:
+    entry_id:
+      required: true
+      selector:
+        text:
+resume:
+  fields:
+    entry_id:
+      required: true
+      selector:
+        text:
+set_temporary_override:
+  fields:
+    entry_id:
+      required: true
+      selector:
+        text:
+    duration_minutes:
+      required: false
+      default: 120
+      selector:
+        number:
+          min: 1
+          max: 1440
+          step: 1
+    target_temp:
+      required: false
+      selector:
+        number:
+          min: 40
+          max: 90
+          step: 0.5
+    hvac_mode:
+      required: false
+      selector:
+        select:
+          options:
+            - heat
+            - cool
+            - heat_cool
+            - off

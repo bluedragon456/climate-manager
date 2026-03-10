@@ -1,0 +1,114 @@
+{
+  "title": "Climate Manager",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Climate Manager",
+        "description": "Pick the thermostat and supporting entities the climate manager should use.",
+        "data": {
+          "thermostat_entity": "Thermostat",
+          "outdoor_temp_entity": "Outdoor temperature sensor",
+          "sleep_schedule_entity": "Sleep schedule",
+          "away_entity": "Away mode boolean",
+          "guest_entity": "Guest mode boolean",
+          "override_entity": "Manual climate lock boolean",
+          "windows_entity": "Window or door open sensor",
+          "season_entity": "Season source"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Climate Manager options",
+        "description": "Tune your comfort targets, comfort curve, override behavior, and safety limits.",
+        "data": {
+          "smart_control_enabled": "Smart control enabled",
+          "hvac_preference": "HVAC preference",
+          "heat_home": "Home heat target",
+          "heat_sleep": "Sleep heat target",
+          "heat_guest": "Guest heat target",
+          "heat_away": "Away heat target",
+          "cool_home": "Home cool target",
+          "cool_sleep": "Sleep cool target",
+          "cool_guest": "Guest cool target",
+          "cool_away": "Away cool target",
+          "curve_band_1_max": "Curve band 1 max outdoor temp",
+          "curve_band_1_offset": "Curve band 1 offset",
+          "curve_band_2_max": "Curve band 2 max outdoor temp",
+          "curve_band_2_offset": "Curve band 2 offset",
+          "curve_band_3_max": "Curve band 3 max outdoor temp",
+          "curve_band_3_offset": "Curve band 3 offset",
+          "curve_band_4_max": "Curve band 4 max outdoor temp",
+          "curve_band_4_offset": "Curve band 4 offset",
+          "curve_weight_home": "Home curve weight",
+          "curve_weight_sleep": "Sleep curve weight",
+          "curve_weight_guest": "Guest curve weight",
+          "curve_weight_away": "Away curve weight",
+          "manual_temp_behavior": "Manual temperature change behavior",
+          "manual_mode_behavior": "Manual HVAC mode change behavior",
+          "override_duration_minutes": "Override duration in minutes",
+          "manual_grace_seconds": "Manual change grace seconds",
+          "windows_open_delay_minutes": "Windows open delay in minutes",
+          "windows_restore_delay_minutes": "Windows restore delay in minutes",
+          "windows_action": "Windows action",
+          "min_heat_target": "Minimum heat target",
+          "max_heat_target": "Maximum heat target",
+          "min_cool_target": "Minimum cool target",
+          "max_cool_target": "Maximum cool target",
+          "temp_change_threshold": "Meaningful temperature change threshold",
+          "cancel_override_on_away": "Cancel override when away turns on",
+          "cancel_override_on_windows": "Cancel override when windows open backoff activates",
+          "cancel_override_on_sleep": "Cancel override when sleep turns on"
+        }
+      }
+    }
+  },
+  "selector": {
+    "hvac_preference": {
+      "options": {
+        "auto": "Auto",
+        "heat": "Heat",
+        "cool": "Cool",
+        "off": "Off"
+      }
+    },
+    "manual_behavior": {
+      "options": {
+        "ignore": "Ignore",
+        "temporary_override": "Temporary override",
+        "hold_until_cleared": "Hold until cleared"
+      }
+    },
+    "windows_action": {
+      "options": {
+        "off": "Turn HVAC off",
+        "heat_setback": "Heat setback",
+        "cool_setback": "Cool setback"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "active_profile": {"name": "Active profile"},
+      "desired_hvac_mode": {"name": "Desired HVAC mode"},
+      "target_heat": {"name": "Target heat"},
+      "target_cool": {"name": "Target cool"},
+      "comfort_offset": {"name": "Comfort offset"},
+      "status": {"name": "Status"}
+    },
+    "binary_sensor": {
+      "smart_control_active": {"name": "Smart control active"},
+      "manual_override_active": {"name": "Manual override active"},
+      "windows_backoff_active": {"name": "Windows backoff active"},
+      "fail_safe_active": {"name": "Fail-safe active"}
+    },
+    "button": {
+      "recalculate_now": {"name": "Recalculate now"},
+      "clear_override": {"name": "Clear override"},
+      "pause": {"name": "Pause"},
+      "resume": {"name": "Resume"}
+    }
+  }
+}
