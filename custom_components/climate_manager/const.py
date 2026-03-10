@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Final
 
 DOMAIN: Final = "climate_manager"
-PLATFORMS: Final = ["sensor", "binary_sensor", "button"]
+PLATFORMS: Final = ["sensor", "binary_sensor", "button", "switch"]
 
 DATA_MANAGER: Final = "manager"
 SERVICE_RECALCULATE: Final = "recalculate"

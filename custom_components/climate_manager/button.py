@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
-from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
+from homeassistant.components.button import ButtonEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import DATA_MANAGER, DOMAIN
+from .entity import ClimateManagerEntity
 from .manager import ClimateManager
 
 
@@ -49,24 +49,23 @@ async def async_setup_entry(
 ) -> None:
     """Set up button entities."""
     manager: ClimateManager = hass.data[DOMAIN][entry.entry_id][DATA_MANAGER]
-    async_add_entities([ClimateManagerButton(entry, manager, description) for description in BUTTONS])
+    async_add_entities(
+        [ClimateManagerButton(entry.entry_id, manager, description) for description in BUTTONS]
+    )
 
 
-class ClimateManagerButton(ButtonEntity):
+class ClimateManagerButton(ClimateManagerEntity):
     """Climate Manager button."""
-
-    _attr_has_entity_name = True
-    _attr_should_poll = False
 
     def __init__(
         self,
-        entry: ConfigEntry,
+        entry_id: str,
         manager: ClimateManager,
         description: ClimateManagerButtonDescription,
     ) -> None:
+        super().__init__(entry_id, manager)
         self.entity_description = description
-        self._manager = manager
-        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
+        self._attr_unique_id = f"{entry_id}_{description.key}"
 
     async def async_press(self) -> None:
         method = getattr(self._manager, self.entity_description.press_fn_name)
@@ -74,3 +73,4 @@ class ClimateManagerButton(ButtonEntity):
             await method("button")
         else:
             await method()
+        self.async_write_ha_state()

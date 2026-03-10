@@ -7,10 +7,11 @@ from typing import Any
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import DATA_MANAGER, DOMAIN
+from .entity import ClimateManagerEntity
 from .manager import ClimateManager
 
 
@@ -56,6 +57,21 @@ SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
         translation_key="status",
         value_fn=lambda manager: manager.runtime.status,
     ),
+    ClimateManagerSensorDescription(
+        key="override_until",
+        translation_key="override_until",
+        value_fn=lambda manager: manager.runtime.manual_override_until,
+    ),
+    ClimateManagerSensorDescription(
+        key="last_reason",
+        translation_key="last_reason",
+        value_fn=lambda manager: manager.last_reason,
+    ),
+    ClimateManagerSensorDescription(
+        key="last_action",
+        translation_key="last_action",
+        value_fn=lambda manager: manager.last_action,
+    ),
 )
 
 
@@ -66,25 +82,23 @@ async def async_setup_entry(
 ) -> None:
     """Set up sensors from a config entry."""
     manager: ClimateManager = hass.data[DOMAIN][entry.entry_id][DATA_MANAGER]
-    async_add_entities([ClimateManagerSensor(entry, manager, description) for description in SENSORS])
+    async_add_entities(
+        [ClimateManagerSensor(entry.entry_id, manager, description) for description in SENSORS]
+    )
 
 
-class ClimateManagerSensor(SensorEntity):
+class ClimateManagerSensor(ClimateManagerEntity, SensorEntity):
     """Climate Manager sensor."""
-
-    _attr_has_entity_name = True
-    _attr_should_poll = False
 
     def __init__(
         self,
-        entry: ConfigEntry,
+        entry_id: str,
         manager: ClimateManager,
         description: ClimateManagerSensorDescription,
     ) -> None:
+        super().__init__(entry_id, manager)
         self.entity_description = description
-        self._entry = entry
-        self._manager = manager
-        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
+        self._attr_unique_id = f"{entry_id}_{description.key}"
 
     @property
     def native_value(self):

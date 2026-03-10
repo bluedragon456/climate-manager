@@ -61,6 +61,8 @@ class ClimateManager:
         self._subscribers: list[Callable[[], None]] = []
         self._save_handle: CALLBACK_TYPE | None = None
         self._lock = asyncio.Lock()
+        self.last_reason: str | None = None
+        self.last_action: str | None = None
 
     async def async_initialize(self) -> None:
         """Initialize manager and listeners."""
@@ -124,6 +126,7 @@ class ClimateManager:
     async def async_recalculate(self, reason: str) -> None:
         """Main control loop."""
         async with self._lock:
+            self.last_reason = reason
             _LOGGER.debug("Recalculating climate manager because %s", reason)
             self._refresh_override_state()
             thermostat = self._thermostat_snapshot()
@@ -337,7 +340,13 @@ class ClimateManager:
             self.runtime.manual_override_active = True
             self.runtime.manual_hold = False
             self.runtime.manual_override_until = now() + timedelta(minutes=self.config.override_duration_minutes)
-        _LOGGER.debug("%s; override active=%s until=%s hold=%s", reason, self.runtime.manual_override_active, self.runtime.manual_override_until, self.runtime.manual_hold)
+        _LOGGER.debug(
+            "%s; override active=%s until=%s hold=%s",
+            reason,
+            self.runtime.manual_override_active,
+            self.runtime.manual_override_until,
+            self.runtime.manual_hold,
+        )
 
     def _clear_manual_override(self) -> None:
         self.runtime.manual_override_active = False
@@ -346,16 +355,19 @@ class ClimateManager:
 
     async def async_clear_override(self) -> None:
         """Clear a manual override."""
+        self.last_action = "clear_override"
         self._clear_manual_override()
         await self.async_recalculate("clear_override")
 
     async def async_pause(self) -> None:
         """Pause smart control."""
+        self.last_action = "pause"
         self.runtime.paused = True
         await self.async_recalculate("pause")
 
     async def async_resume(self) -> None:
         """Resume smart control."""
+        self.last_action = "resume"
         self.runtime.paused = False
         await self.async_recalculate("resume")
 
@@ -366,6 +378,7 @@ class ClimateManager:
         hvac_mode: str | None = None,
     ) -> None:
         """Set a temporary override."""
+        self.last_action = "set_temporary_override"
         self.runtime.manual_override_active = True
         self.runtime.manual_hold = False
         self.runtime.manual_override_until = now() + timedelta(minutes=duration_minutes)
@@ -445,6 +458,7 @@ class ClimateManager:
                 await self._async_set_temperature(target_temp_low=target_heat, target_temp_high=target_cool)
 
     async def _async_set_hvac_mode(self, hvac_mode: str) -> None:
+        self.last_action = f"set_hvac_mode:{hvac_mode}"
         _LOGGER.debug("Applying HVAC mode %s to %s", hvac_mode, self.config.thermostat_entity)
         await self.hass.services.async_call(
             "climate",
@@ -469,6 +483,7 @@ class ClimateManager:
         if target_temp_high is not None:
             data["target_temp_high"] = target_temp_high
 
+        self.last_action = f"set_temperature:{data}"
         _LOGGER.debug("Applying temperature payload %s to %s", data, self.config.thermostat_entity)
         await self.hass.services.async_call("climate", "set_temperature", data, blocking=True)
         self.runtime.last_commanded_temp = temperature

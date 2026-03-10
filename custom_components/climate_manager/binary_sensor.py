@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import DATA_MANAGER, DOMAIN, STATUS_UNAVAILABLE
+from .entity import ClimateManagerEntity
 from .manager import ClimateManager
 
 
@@ -22,7 +23,7 @@ BINARY_SENSORS: tuple[ClimateManagerBinarySensorDescription, ...] = (
     ClimateManagerBinarySensorDescription(
         key="smart_control_active",
         translation_key="smart_control_active",
-        value_fn=lambda manager: manager.runtime.status not in {STATUS_UNAVAILABLE, "paused"},
+        value_fn=lambda manager: manager.config.smart_control_enabled and manager.runtime.status not in {STATUS_UNAVAILABLE, "paused"},
     ),
     ClimateManagerBinarySensorDescription(
         key="manual_override_active",
@@ -49,24 +50,23 @@ async def async_setup_entry(
 ) -> None:
     """Set up binary sensors from a config entry."""
     manager: ClimateManager = hass.data[DOMAIN][entry.entry_id][DATA_MANAGER]
-    async_add_entities([ClimateManagerBinarySensor(entry, manager, description) for description in BINARY_SENSORS])
+    async_add_entities(
+        [ClimateManagerBinarySensor(entry.entry_id, manager, description) for description in BINARY_SENSORS]
+    )
 
 
-class ClimateManagerBinarySensor(BinarySensorEntity):
+class ClimateManagerBinarySensor(ClimateManagerEntity, BinarySensorEntity):
     """Climate Manager binary sensor."""
-
-    _attr_has_entity_name = True
-    _attr_should_poll = False
 
     def __init__(
         self,
-        entry: ConfigEntry,
+        entry_id: str,
         manager: ClimateManager,
         description: ClimateManagerBinarySensorDescription,
     ) -> None:
+        super().__init__(entry_id, manager)
         self.entity_description = description
-        self._manager = manager
-        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
+        self._attr_unique_id = f"{entry_id}_{description.key}"
 
     @property
     def is_on(self):
