@@ -60,6 +60,7 @@ SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
     ClimateManagerSensorDescription(
         key="override_until",
         translation_key="override_until",
+        device_class=SensorDeviceClass.TIMESTAMP,
         value_fn=lambda manager: manager.runtime.manual_override_until,
     ),
     ClimateManagerSensorDescription(
@@ -82,9 +83,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up sensors from a config entry."""
     manager: ClimateManager = hass.data[DOMAIN][entry.entry_id][DATA_MANAGER]
-    async_add_entities(
-        [ClimateManagerSensor(entry.entry_id, manager, description) for description in SENSORS]
-    )
+    async_add_entities([ClimateManagerSensor(entry.entry_id, manager, description) for description in SENSORS])
 
 
 class ClimateManagerSensor(ClimateManagerEntity, SensorEntity):

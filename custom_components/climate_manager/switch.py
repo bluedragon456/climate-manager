@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
@@ -33,9 +34,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up switch entities."""
     manager: ClimateManager = hass.data[DOMAIN][entry.entry_id][DATA_MANAGER]
-    async_add_entities(
-        [ClimateManagerEnabledSwitch(entry.entry_id, manager, SWITCHES[0])]
-    )
+    async_add_entities([ClimateManagerEnabledSwitch(entry.entry_id, manager, SWITCHES[0])])
 
 
 class ClimateManagerEnabledSwitch(ClimateManagerEntity, SwitchEntity):
@@ -53,14 +52,15 @@ class ClimateManagerEnabledSwitch(ClimateManagerEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        return bool(self._manager.runtime.smart_control_enabled)
+        return not self._manager.runtime.paused
 
-    async def async_turn_on(self, **kwargs) -> None:
-        self._manager.runtime.smart_control_enabled = True
-        await self._manager.async_recalculate("master_switch_on")
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._manager.async_resume()
         self.async_write_ha_state()
 
-    async def async_turn_off(self, **kwargs) -> None:
-        self._manager.runtime.smart_control_enabled = False
+    async def async_turn_off(self, **kwargs: Any) -> None:
         await self._manager.async_pause()
         self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(self._manager.async_subscribe(self.async_write_ha_state))

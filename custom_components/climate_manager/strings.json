@@ -96,7 +96,10 @@
       "target_heat": {"name": "Target heat"},
       "target_cool": {"name": "Target cool"},
       "comfort_offset": {"name": "Comfort offset"},
-      "status": {"name": "Status"}
+      "status": {"name": "Status"},
+      "override_until": {"name": "Override until"},
+      "last_reason": {"name": "Last reason"},
+      "last_action": {"name": "Last action"}
     },
     "binary_sensor": {
       "smart_control_active": {"name": "Smart control active"},
@@ -109,6 +112,9 @@
       "clear_override": {"name": "Clear override"},
       "pause": {"name": "Pause"},
       "resume": {"name": "Resume"}
+    },
+    "switch": {
+      "enabled": {"name": "Enabled"}
     }
   }
 }

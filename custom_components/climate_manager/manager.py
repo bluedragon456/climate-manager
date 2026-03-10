@@ -10,7 +10,6 @@ from typing import Any
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
-from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_CANCEL_OVERRIDE_ON_AWAY,
@@ -60,6 +59,7 @@ class ClimateManager:
         self._listeners: list[CALLBACK_TYPE] = []
         self._subscribers: list[Callable[[], None]] = []
         self._save_handle: CALLBACK_TYPE | None = None
+        self._recalculate_handle: CALLBACK_TYPE | None = None
         self._lock = asyncio.Lock()
         self.last_reason: str | None = None
         self.last_action: str | None = None
@@ -99,6 +99,9 @@ class ClimateManager:
         if self._save_handle:
             self._save_handle()
             self._save_handle = None
+        if self._recalculate_handle:
+            self._recalculate_handle()
+            self._recalculate_handle = None
         await self._runtime_store.async_save(self.runtime)
 
     @callback
@@ -134,6 +137,7 @@ class ClimateManager:
             if not thermostat.available:
                 self.runtime.status = STATUS_UNAVAILABLE
                 self._schedule_save()
+                self._schedule_recalculate()
                 self._notify_subscribers()
                 return
 
@@ -149,6 +153,7 @@ class ClimateManager:
             await self._apply_if_needed(thermostat)
             self._update_status()
             self._schedule_save()
+            self._schedule_recalculate()
             self._notify_subscribers()
 
     def _refresh_override_state(self) -> None:
@@ -507,6 +512,54 @@ class ClimateManager:
         if self._save_handle:
             self._save_handle()
         self._save_handle = async_call_later(self.hass, 2, self._async_save_runtime)
+
+    @callback
+    def _schedule_recalculate(self) -> None:
+        """Schedule a recalc for time-based transitions."""
+        if self._recalculate_handle:
+            self._recalculate_handle()
+            self._recalculate_handle = None
+
+        delays: list[float] = []
+        current = now()
+
+        if self.runtime.manual_override_active and not self.runtime.manual_hold and self.runtime.manual_override_until:
+            delay = (self.runtime.manual_override_until - current).total_seconds()
+            if delay > 0:
+                delays.append(delay)
+
+        if self.runtime.windows_open_since is not None:
+            if self.runtime.windows_backoff_active and self.runtime.windows_closed_since is not None:
+                delay = (
+                    self.runtime.windows_closed_since
+                    + timedelta(minutes=self.config.windows_restore_delay_minutes)
+                    - current
+                ).total_seconds()
+                if delay > 0:
+                    delays.append(delay)
+            elif not self.runtime.windows_backoff_active:
+                delay = (
+                    self.runtime.windows_open_since
+                    + timedelta(minutes=self.config.windows_open_delay_minutes)
+                    - current
+                ).total_seconds()
+                if delay > 0:
+                    delays.append(delay)
+
+        if not delays:
+            return
+
+        self._recalculate_handle = async_call_later(
+            self.hass,
+            min(delays),
+            self._async_handle_scheduled_recalculate,
+        )
+
+    @callback
+    def _async_handle_scheduled_recalculate(self, *_: Any) -> None:
+        """Trigger recalculation when a timer expires."""
+        self._recalculate_handle = None
+        self.hass.async_create_task(self.async_recalculate("scheduled"))
 
     async def _async_save_runtime(self, *_: Any) -> None:
         self._save_handle = None
