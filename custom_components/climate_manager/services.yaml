@@ -49,7 +49,7 @@ set_temporary_override:
       selector:
         select:
           options:
-            - heat
-            - cool
-            - heat_cool
-            - off
+            - "heat"
+            - "cool"
+            - "heat_cool"
+            - "off"
