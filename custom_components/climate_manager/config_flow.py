@@ -54,7 +54,7 @@ class ClimateManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     selector.EntitySelectorConfig(domain="binary_sensor")
                 ),
                 vol.Optional(CONF_SEASON_ENTITY): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain_filter=["input_text", "sensor", "select"])
+                    selector.EntitySelectorConfig(domain=["input_text", "sensor", "select"])
                 ),
             }
         )
