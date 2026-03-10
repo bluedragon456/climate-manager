@@ -12,10 +12,6 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 
 from .const import (
-    CONF_CANCEL_OVERRIDE_ON_AWAY,
-    CONF_CANCEL_OVERRIDE_ON_SLEEP,
-    CONF_CANCEL_OVERRIDE_ON_WINDOWS,
-    HVAC_PREF_AUTO,
     HVAC_PREF_COOL,
     HVAC_PREF_HEAT,
     HVAC_PREF_OFF,
@@ -59,7 +55,7 @@ class ClimateManager:
         self._listeners: list[CALLBACK_TYPE] = []
         self._subscribers: list[Callable[[], None]] = []
         self._save_handle: CALLBACK_TYPE | None = None
-        self._recalculate_handle: CALLBACK_TYPE | None = None
+        self._window_timer_handle: CALLBACK_TYPE | None = None
         self._lock = asyncio.Lock()
         self.last_reason: str | None = None
         self.last_action: str | None = None
@@ -89,6 +85,9 @@ class ClimateManager:
                 )
             )
 
+        # Recreate any pending window-delay recalc on startup
+        self._schedule_window_recalc_if_needed()
+
         await self.async_recalculate("startup")
 
     async def async_shutdown(self) -> None:
@@ -99,9 +98,9 @@ class ClimateManager:
         if self._save_handle:
             self._save_handle()
             self._save_handle = None
-        if self._recalculate_handle:
-            self._recalculate_handle()
-            self._recalculate_handle = None
+        if self._window_timer_handle:
+            self._window_timer_handle()
+            self._window_timer_handle = None
         await self._runtime_store.async_save(self.runtime)
 
     @callback
@@ -124,20 +123,64 @@ class ClimateManager:
     @callback
     def _handle_state_change(self, event: Any) -> None:
         entity_id = event.data.get("entity_id")
+        if entity_id == self.config.windows_entity:
+            self._schedule_window_recalc_if_needed()
         self.hass.async_create_task(self.async_recalculate(f"state_change:{entity_id}"))
+
+    @callback
+    def _schedule_window_recalc_if_needed(self) -> None:
+        """Schedule a recalc for window open/restore delays."""
+        if self._window_timer_handle:
+            self._window_timer_handle()
+            self._window_timer_handle = None
+
+        if not self.config.windows_entity:
+            return
+
+        entity_state = self.hass.states.get(self.config.windows_entity)
+        current = now()
+
+        if entity_state is not None and entity_state.state == STATE_ON:
+            if self.runtime.windows_open_since is not None:
+                fire_in = timedelta(minutes=self.config.windows_open_delay_minutes) - (
+                    current - self.runtime.windows_open_since
+                )
+                if fire_in.total_seconds() > 0:
+                    self._window_timer_handle = async_call_later(
+                        self.hass,
+                        fire_in.total_seconds(),
+                        self._async_window_timer_recalc,
+                    )
+            return
+
+        if self.runtime.windows_closed_since is not None:
+            fire_in = timedelta(minutes=self.config.windows_restore_delay_minutes) - (
+                current - self.runtime.windows_closed_since
+            )
+            if fire_in.total_seconds() > 0:
+                self._window_timer_handle = async_call_later(
+                    self.hass,
+                    fire_in.total_seconds(),
+                    self._async_window_timer_recalc,
+                )
+
+    async def _async_window_timer_recalc(self, *_: Any) -> None:
+        """Recalculate when a window delay expires."""
+        self._window_timer_handle = None
+        await self.async_recalculate("window_timer")
 
     async def async_recalculate(self, reason: str) -> None:
         """Main control loop."""
         async with self._lock:
             self.last_reason = reason
             _LOGGER.debug("Recalculating climate manager because %s", reason)
+
             self._refresh_override_state()
             thermostat = self._thermostat_snapshot()
 
             if not thermostat.available:
                 self.runtime.status = STATUS_UNAVAILABLE
                 self._schedule_save()
-                self._schedule_recalculate()
                 self._notify_subscribers()
                 return
 
@@ -145,6 +188,7 @@ class ClimateManager:
             profile = self._resolve_profile()
             desired_mode = self._resolve_desired_hvac_mode(profile)
             target_heat, target_cool = self._resolve_targets(profile, desired_mode)
+
             self.runtime.active_profile = profile
             self.runtime.desired_hvac_mode = desired_mode
             self.runtime.target_heat = target_heat
@@ -152,8 +196,8 @@ class ClimateManager:
 
             await self._apply_if_needed(thermostat)
             self._update_status()
+            self._schedule_window_recalc_if_needed()
             self._schedule_save()
-            self._schedule_recalculate()
             self._notify_subscribers()
 
     def _refresh_override_state(self) -> None:
@@ -316,11 +360,18 @@ class ClimateManager:
             and thermostat.hvac_mode != self.runtime.last_commanded_hvac_mode
         )
 
-        temp_changed = False
         if thermostat.hvac_mode == "heat_cool":
             temp_changed = not (
-                nearly_equal(thermostat.target_temp_low, self.runtime.last_commanded_low, self.config.temp_change_threshold)
-                and nearly_equal(thermostat.target_temp_high, self.runtime.last_commanded_high, self.config.temp_change_threshold)
+                nearly_equal(
+                    thermostat.target_temp_low,
+                    self.runtime.last_commanded_low,
+                    self.config.temp_change_threshold,
+                )
+                and nearly_equal(
+                    thermostat.target_temp_high,
+                    self.runtime.last_commanded_high,
+                    self.config.temp_change_threshold,
+                )
             )
         else:
             temp_changed = not nearly_equal(
@@ -359,9 +410,19 @@ class ClimateManager:
         self.runtime.manual_hold = False
 
     async def async_clear_override(self) -> None:
-        """Clear a manual override."""
+        """Clear a manual override and re-baseline manual detection."""
         self.last_action = "clear_override"
+
         self._clear_manual_override()
+
+        thermostat = self._thermostat_snapshot()
+        if thermostat.available:
+            self.runtime.last_commanded_hvac_mode = thermostat.hvac_mode
+            self.runtime.last_commanded_temp = thermostat.target_temp
+            self.runtime.last_commanded_low = thermostat.target_temp_low
+            self.runtime.last_commanded_high = thermostat.target_temp_high
+            self.runtime.last_command_time = now()
+
         await self.async_recalculate("clear_override")
 
     async def async_pause(self) -> None:
@@ -387,6 +448,7 @@ class ClimateManager:
         self.runtime.manual_override_active = True
         self.runtime.manual_hold = False
         self.runtime.manual_override_until = now() + timedelta(minutes=duration_minutes)
+
         if hvac_mode:
             await self.hass.services.async_call(
                 "climate",
@@ -401,11 +463,13 @@ class ClimateManager:
                 {ATTR_ENTITY_ID: self.config.thermostat_entity, "temperature": target_temp},
                 blocking=True,
             )
+
         await self.async_recalculate("set_temporary_override")
 
     def _windows_backoff_active(self) -> bool:
         if not self.config.windows_entity:
             return False
+
         current = now()
         entity_state = self.hass.states.get(self.config.windows_entity)
         is_open = entity_state is not None and entity_state.state == STATE_ON
@@ -427,6 +491,7 @@ class ClimateManager:
                 return True
             self.runtime.windows_open_since = None
             self.runtime.windows_closed_since = None
+
         return False
 
     async def _apply_if_needed(self, thermostat: ThermostatSnapshot) -> None:
@@ -512,54 +577,6 @@ class ClimateManager:
         if self._save_handle:
             self._save_handle()
         self._save_handle = async_call_later(self.hass, 2, self._async_save_runtime)
-
-    @callback
-    def _schedule_recalculate(self) -> None:
-        """Schedule a recalc for time-based transitions."""
-        if self._recalculate_handle:
-            self._recalculate_handle()
-            self._recalculate_handle = None
-
-        delays: list[float] = []
-        current = now()
-
-        if self.runtime.manual_override_active and not self.runtime.manual_hold and self.runtime.manual_override_until:
-            delay = (self.runtime.manual_override_until - current).total_seconds()
-            if delay > 0:
-                delays.append(delay)
-
-        if self.runtime.windows_open_since is not None:
-            if self.runtime.windows_backoff_active and self.runtime.windows_closed_since is not None:
-                delay = (
-                    self.runtime.windows_closed_since
-                    + timedelta(minutes=self.config.windows_restore_delay_minutes)
-                    - current
-                ).total_seconds()
-                if delay > 0:
-                    delays.append(delay)
-            elif not self.runtime.windows_backoff_active:
-                delay = (
-                    self.runtime.windows_open_since
-                    + timedelta(minutes=self.config.windows_open_delay_minutes)
-                    - current
-                ).total_seconds()
-                if delay > 0:
-                    delays.append(delay)
-
-        if not delays:
-            return
-
-        self._recalculate_handle = async_call_later(
-            self.hass,
-            min(delays),
-            self._async_handle_scheduled_recalculate,
-        )
-
-    @callback
-    def _async_handle_scheduled_recalculate(self, *_: Any) -> None:
-        """Trigger recalculation when a timer expires."""
-        self._recalculate_handle = None
-        self.hass.async_create_task(self.async_recalculate("scheduled"))
 
     async def _async_save_runtime(self, *_: Any) -> None:
         self._save_handle = None
