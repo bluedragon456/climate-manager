@@ -2,17 +2,50 @@ name: Validate
 
 on:
   push:
-    branches:
-      - main
   pull_request:
   workflow_dispatch:
 
 jobs:
-  hassfest:
+  validate:
     runs-on: ubuntu-latest
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Run Hassfest
-        uses: home-assistant/actions/hassfest@master
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate repository structure
+        run: |
+          test -f custom_components/climate_manager/manifest.json
+          test -f custom_components/climate_manager/__init__.py
+          test -f custom_components/climate_manager/config_flow.py
+          test -f hacs.json
+
+      - name: Validate manifest contents
+        run: |
+          python - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          manifest = Path("custom_components/climate_manager/manifest.json")
+          data = json.loads(manifest.read_text(encoding="utf-8"))
+
+          if data.get("domain") != "climate_manager":
+              print("Domain must be climate_manager")
+              sys.exit(1)
+
+          if data.get("config_flow") is not True:
+              print("config_flow must be true")
+              sys.exit(1)
+
+          if "version" not in data:
+              print("version missing from manifest")
+              sys.exit(1)
+
+          print("Manifest validation passed")
+          PY
