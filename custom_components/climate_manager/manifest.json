@@ -6,10 +6,10 @@
   "documentation": "https://github.com/bluedragon456/climate-manager",
   "integration_type": "service",
   "iot_class": "local_push",
+  "issue_tracker": "https://github.com/bluedragon456/climate-manager/issues",
   "loggers": [
     "custom_components.climate_manager"
   ],
   "requirements": [],
-  "version": "1.0.0",
-  "issue_tracker": "https://github.com/bluedragon456/climate-manager/issues"
+  "version": "1.0.0"
 }
