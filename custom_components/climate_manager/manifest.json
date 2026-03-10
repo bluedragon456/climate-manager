@@ -10,6 +10,6 @@
     "custom_components.climate_manager"
   ],
   "requirements": [],
-  "version": "0.1.0",
+  "version": "1.0.0",
   "issue_tracker": "https://github.com/bluedragon456/climate-manager/issues"
 }
