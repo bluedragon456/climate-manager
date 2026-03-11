@@ -20,6 +20,12 @@ class ClimateManagerSensorDescription(SensorEntityDescription):
     value_fn: Any
 
 
+def _temperature_or_zero(value: float | None) -> float:
+    if value is None:
+        return 0.0
+    return value
+
+
 SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
     ClimateManagerSensorDescription(
         key="active_profile",
@@ -36,14 +42,14 @@ SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
         translation_key="target_heat",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
-        value_fn=lambda manager: manager.runtime.target_heat,
+        value_fn=lambda manager: _temperature_or_zero(manager.runtime.target_heat),
     ),
     ClimateManagerSensorDescription(
         key="target_cool",
         translation_key="target_cool",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
-        value_fn=lambda manager: manager.runtime.target_cool,
+        value_fn=lambda manager: _temperature_or_zero(manager.runtime.target_cool),
     ),
     ClimateManagerSensorDescription(
         key="comfort_offset",
