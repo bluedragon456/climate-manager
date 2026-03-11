@@ -42,7 +42,7 @@ class ManagerConfig:
     override_duration_minutes: int = 120
     manual_grace_seconds: int = 20
     windows_open_delay_minutes: int = 15
-    windows_restore_delay_minutes: int = 5
+    windows_restore_delay_minutes: int = 15
     windows_action: str = "off"
     min_heat_target: float = 60.0
     max_heat_target: float = 75.0
@@ -65,6 +65,7 @@ class RuntimeState:
     manual_override_until: datetime | None = None
     manual_hold: bool = False
     windows_backoff_active: bool = False
+    windows_backoff_until: datetime | None = None
     paused: bool = False
     status: str = "idle"
     last_commanded_hvac_mode: str | None = None
@@ -84,3 +85,5 @@ class ThermostatSnapshot:
     target_temp_high: float | None
     current_temperature: float | None
     available: bool
+
+

@@ -50,8 +50,8 @@
           "manual_mode_behavior": "Manual HVAC mode change behavior",
           "override_duration_minutes": "Override duration in minutes",
           "manual_grace_seconds": "Manual change grace seconds",
-          "windows_open_delay_minutes": "Windows open delay in minutes",
-          "windows_restore_delay_minutes": "Windows restore delay in minutes",
+          "windows_open_delay_minutes": "Window or door delay before backoff in minutes",
+          "windows_restore_delay_minutes": "Window or door close buffer in seconds",
           "windows_action": "Windows action",
           "min_heat_target": "Minimum heat target",
           "max_heat_target": "Maximum heat target",
@@ -98,6 +98,7 @@
       "comfort_offset": {"name": "Comfort offset"},
       "status": {"name": "Status"},
       "override_until": {"name": "Override until"},
+      "windows_backoff_until": {"name": "Windows backoff until"},
       "last_reason": {"name": "Last reason"},
       "last_action": {"name": "Last action"}
     },
@@ -118,3 +119,8 @@
     }
   }
 }
+
+
+
+
+

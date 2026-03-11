@@ -17,6 +17,7 @@ _DATETIME_FIELDS = {
     "last_command_time",
     "windows_open_since",
     "windows_closed_since",
+    "windows_backoff_until",
 }
 
 
@@ -46,3 +47,4 @@ class RuntimeStore:
             if isinstance(value, datetime):
                 data[field] = value.isoformat()
         await self._store.async_save(data)
+

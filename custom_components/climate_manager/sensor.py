@@ -64,6 +64,12 @@ SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
         value_fn=lambda manager: manager.runtime.manual_override_until,
     ),
     ClimateManagerSensorDescription(
+        key="windows_backoff_until",
+        translation_key="windows_backoff_until",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        value_fn=lambda manager: manager.runtime.windows_backoff_until,
+    ),
+    ClimateManagerSensorDescription(
         key="last_reason",
         translation_key="last_reason",
         value_fn=lambda manager: manager.last_reason,
