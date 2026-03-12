@@ -49,6 +49,7 @@ class ClimateManager:
         self._subscribers: list[Callable[[], None]] = []
         self._save_handle: CALLBACK_TYPE | None = None
         self._window_timer_handle: CALLBACK_TYPE | None = None
+        self._override_timer_handle: CALLBACK_TYPE | None = None
         self._lock = asyncio.Lock()
         self.last_reason: str | None = None
         self.last_action: str | None = None
@@ -76,6 +77,7 @@ class ClimateManager:
                 )
             )
         self._schedule_window_recalc_if_needed()
+        self._schedule_override_recalc_if_needed()
         await self.async_recalculate("startup")
     async def async_shutdown(self) -> None:
         """Shutdown manager."""
@@ -88,6 +90,9 @@ class ClimateManager:
         if self._window_timer_handle:
             self._window_timer_handle()
             self._window_timer_handle = None
+        if self._override_timer_handle:
+            self._override_timer_handle()
+            self._override_timer_handle = None
         await self._runtime_store.async_save(self.runtime)
     @callback
     def async_subscribe(self, update_callback: Callable[[], None]) -> CALLBACK_TYPE:
@@ -105,6 +110,14 @@ class ClimateManager:
     @callback
     def _handle_state_change(self, event: Any) -> None:
         entity_id = event.data.get("entity_id")
+        old_state = event.data.get("old_state")
+        new_state = event.data.get("new_state")
+        _LOGGER.debug(
+            "State change for %s: %s -> %s",
+            entity_id,
+            None if old_state is None else old_state.state,
+            None if new_state is None else new_state.state,
+        )
         if entity_id == self.config.windows_entity:
             self._schedule_window_recalc_if_needed()
         self.hass.async_create_task(self.async_recalculate(f"state_change:{entity_id}"))
@@ -144,6 +157,28 @@ class ClimateManager:
         """Recalculate when a window timer expires."""
         self._window_timer_handle = None
         await self.async_recalculate("window_timer")
+    @callback
+    def _schedule_override_recalc_if_needed(self) -> None:
+        """Schedule a recalc when a temporary override should expire."""
+        if self._override_timer_handle:
+            self._override_timer_handle()
+            self._override_timer_handle = None
+        if not self.runtime.manual_override_active or self.runtime.manual_hold:
+            return
+        expires = self.runtime.manual_override_until
+        if expires is None:
+            return
+        fire_in = (expires - now()).total_seconds()
+        if fire_in > 0:
+            self._override_timer_handle = async_call_later(
+                self.hass,
+                fire_in,
+                self._async_override_timer_recalc,
+            )
+    async def _async_override_timer_recalc(self, *_: Any) -> None:
+        """Recalculate when an override timer expires."""
+        self._override_timer_handle = None
+        await self.async_recalculate("override_timer")
     async def async_recalculate(self, reason: str) -> None:
         """Main control loop."""
         async with self._lock:
@@ -156,7 +191,8 @@ class ClimateManager:
                 self._schedule_save()
                 self._notify_subscribers()
                 return
-            self._detect_manual_change(thermostat)
+            if reason == "startup" or reason.startswith(f"state_change:{self.config.thermostat_entity}"):
+                self._detect_manual_change(thermostat)
             profile = self._resolve_profile()
             desired_mode = self._resolve_desired_hvac_mode(profile)
             target_heat, target_cool = self._resolve_targets(profile, desired_mode)
@@ -167,6 +203,7 @@ class ClimateManager:
             await self._apply_if_needed(thermostat)
             self._update_status()
             self._schedule_window_recalc_if_needed()
+            self._schedule_override_recalc_if_needed()
             self._schedule_save()
             self._notify_subscribers()
     def _refresh_override_state(self) -> None:
@@ -174,7 +211,7 @@ class ClimateManager:
         if self.runtime.manual_override_active and not self.runtime.manual_hold:
             expires = self.runtime.manual_override_until
             if expires and current >= expires:
-                _LOGGER.debug("Manual override expired")
+                _LOGGER.info("Manual override expired for %s at %s", self.entry_id, expires.isoformat())
                 self.runtime.manual_override_active = False
                 self.runtime.manual_override_until = None
         if self.runtime.manual_override_active:
@@ -332,12 +369,26 @@ class ClimateManager:
                 self.runtime.last_commanded_temp,
                 self.config.temp_change_threshold,
             )
+        if mode_changed or temp_changed:
+            _LOGGER.info(
+                "Manual change candidate for %s: hvac_mode current=%s commanded=%s temp current=%s commanded=%s low current=%s commanded=%s high current=%s commanded=%s",
+                self.entry_id,
+                thermostat.hvac_mode,
+                self.runtime.last_commanded_hvac_mode,
+                thermostat.target_temp,
+                self.runtime.last_commanded_temp,
+                thermostat.target_temp_low,
+                self.runtime.last_commanded_low,
+                thermostat.target_temp_high,
+                self.runtime.last_commanded_high,
+            )
         if mode_changed:
             self._apply_manual_behavior(self.config.manual_mode_behavior, "manual hvac mode change detected")
         elif temp_changed:
             self._apply_manual_behavior(self.config.manual_temp_behavior, "manual temperature change detected")
     def _apply_manual_behavior(self, behavior: str, reason: str) -> None:
         if behavior == MANUAL_BEHAVIOR_IGNORE:
+            _LOGGER.info("Ignoring manual behavior trigger for %s because behavior is ignore", self.entry_id)
             return
         if behavior == MANUAL_BEHAVIOR_HOLD:
             self.runtime.manual_override_active = True
@@ -347,9 +398,10 @@ class ClimateManager:
             self.runtime.manual_override_active = True
             self.runtime.manual_hold = False
             self.runtime.manual_override_until = now() + timedelta(minutes=self.config.override_duration_minutes)
-        _LOGGER.debug(
-            "%s; override active=%s until=%s hold=%s",
+        _LOGGER.info(
+            "%s; behavior=%s override active=%s until=%s hold=%s",
             reason,
+            behavior,
             self.runtime.manual_override_active,
             self.runtime.manual_override_until,
             self.runtime.manual_hold,
@@ -512,3 +564,5 @@ class ClimateManager:
     async def _async_save_runtime(self, *_: Any) -> None:
         self._save_handle = None
         await self._runtime_store.async_save(self.runtime)
+
+
