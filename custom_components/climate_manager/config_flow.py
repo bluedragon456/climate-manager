@@ -3,13 +3,31 @@ from __future__ import annotations
 
 from typing import Any
 
-
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import *  # noqa: F403,F401
+
+HVAC_PREFERENCE_OPTIONS = [
+    selector.SelectOptionDict(value=HVAC_PREF_AUTO, label="Auto"),
+    selector.SelectOptionDict(value=HVAC_PREF_HEAT, label="Heat"),
+    selector.SelectOptionDict(value=HVAC_PREF_COOL, label="Cool"),
+    selector.SelectOptionDict(value=HVAC_PREF_OFF, label="Off"),
+]
+
+MANUAL_BEHAVIOR_OPTIONS = [
+    selector.SelectOptionDict(value=MANUAL_BEHAVIOR_IGNORE, label="Ignore"),
+    selector.SelectOptionDict(value=MANUAL_BEHAVIOR_TEMPORARY, label="Temporary override"),
+    selector.SelectOptionDict(value=MANUAL_BEHAVIOR_HOLD, label="Hold until cleared"),
+]
+
+WINDOWS_ACTION_OPTIONS = [
+    selector.SelectOptionDict(value=WINDOWS_ACTION_OFF, label="Turn HVAC off"),
+    selector.SelectOptionDict(value=WINDOWS_ACTION_HEAT_SETBACK, label="Heat setback"),
+    selector.SelectOptionDict(value=WINDOWS_ACTION_COOL_SETBACK, label="Cool setback"),
+]
 
 
 class ClimateManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -81,9 +99,8 @@ class ClimateManagerOptionsFlow(config_entries.OptionsFlow):
                     default=options[CONF_HVAC_PREFERENCE],
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=HVAC_PREFERENCES,
+                        options=HVAC_PREFERENCE_OPTIONS,
                         mode=selector.SelectSelectorMode.DROPDOWN,
-                        translation_key="hvac_preference",
                     )
                 ),
                 vol.Required(CONF_HEAT_HOME, default=options[CONF_HEAT_HOME]): vol.Coerce(float),
@@ -111,9 +128,8 @@ class ClimateManagerOptionsFlow(config_entries.OptionsFlow):
                     default=options[CONF_MANUAL_TEMP_BEHAVIOR],
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=MANUAL_BEHAVIORS,
+                        options=MANUAL_BEHAVIOR_OPTIONS,
                         mode=selector.SelectSelectorMode.DROPDOWN,
-                        translation_key="manual_behavior",
                     )
                 ),
                 vol.Required(
@@ -121,9 +137,8 @@ class ClimateManagerOptionsFlow(config_entries.OptionsFlow):
                     default=options[CONF_MANUAL_MODE_BEHAVIOR],
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=MANUAL_BEHAVIORS,
+                        options=MANUAL_BEHAVIOR_OPTIONS,
                         mode=selector.SelectSelectorMode.DROPDOWN,
-                        translation_key="manual_behavior",
                     )
                 ),
                 vol.Required(CONF_OVERRIDE_DURATION_MINUTES, default=options[CONF_OVERRIDE_DURATION_MINUTES]): vol.Coerce(int),
@@ -135,9 +150,8 @@ class ClimateManagerOptionsFlow(config_entries.OptionsFlow):
                     default=options[CONF_WINDOWS_ACTION],
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=WINDOWS_ACTIONS,
+                        options=WINDOWS_ACTION_OPTIONS,
                         mode=selector.SelectSelectorMode.DROPDOWN,
-                        translation_key="windows_action",
                     )
                 ),
                 vol.Required(CONF_MIN_HEAT_TARGET, default=options[CONF_MIN_HEAT_TARGET]): vol.Coerce(float),
