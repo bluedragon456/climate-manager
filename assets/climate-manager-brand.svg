@@ -1,0 +1,50 @@
+<svg width="1600" height="500" viewBox="0 0 1600 500" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="shieldBg" x1="86" y1="42" x2="362" y2="380" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#21B493"/>
+      <stop offset="1" stop-color="#067E83"/>
+    </linearGradient>
+    <linearGradient id="sunPanel" x1="252" y1="96" x2="398" y2="234" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF06A"/>
+      <stop offset="1" stop-color="#F3C400"/>
+    </linearGradient>
+    <linearGradient id="snowPanel" x1="210" y1="220" x2="383" y2="383" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2AC6FF"/>
+      <stop offset="1" stop-color="#0F8BFF"/>
+    </linearGradient>
+  </defs>
+  <path d="M210 48C246.681 70.878 291.581 87.345 348.4 94.5V216.5C348.4 311.539 287.61 393.016 210 431C132.39 393.016 71.6 311.539 71.6 216.5V94.5C128.419 87.345 173.319 70.878 210 48Z" fill="url(#shieldBg)"/>
+  <path d="M210 64C243.704 83.55 284.219 98.007 334 107.117V212.438C334 296.668 285.815 368.645 210 406C134.185 368.645 86 296.668 86 212.438V107.117C135.781 98.007 176.296 83.55 210 64Z" fill="url(#shieldBg)" stroke="#0B746E" stroke-width="3"/>
+  <path d="M216 112L321 136.5V265L216 209V112Z" fill="url(#sunPanel)"/>
+  <path d="M216 219.5L321 274V346.5C290.995 376.143 255.997 398.939 210 420C157.46 397.938 121.717 375.414 100 350V279L172 237L216 219.5Z" fill="url(#snowPanel)"/>
+  <path d="M216 111V219.5" stroke="#FFFDF4" stroke-width="9" stroke-linecap="round"/>
+  <path d="M171 236L321 312" stroke="#FFFDF4" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="282" cy="180" r="28" fill="#F1F3F5"/>
+  <g stroke="#F7F7F7" stroke-width="8" stroke-linecap="round">
+    <path d="M282 133V148"/>
+    <path d="M282 212V227"/>
+    <path d="M235 180H250"/>
+    <path d="M314 180H329"/>
+    <path d="M248 146L259 157"/>
+    <path d="M305 203L316 214"/>
+    <path d="M316 146L305 157"/>
+    <path d="M259 203L248 214"/>
+  </g>
+  <g stroke="#F7F7F7" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M254 314H334"/>
+    <path d="M294 274V354"/>
+    <path d="M266 286L322 342"/>
+    <path d="M322 286L266 342"/>
+  </g>
+  <g>
+    <path d="M164 128C151.469 128 141.31 138.159 141.31 150.69V279.619C129.523 287.946 121.8 301.676 121.8 317.198C121.8 342.648 142.432 363.28 167.882 363.28C193.332 363.28 213.964 342.648 213.964 317.198C213.964 301.684 206.252 287.961 194.479 279.633V150.69C194.479 138.159 184.32 128 171.789 128H164Z" fill="#F2F4F5" stroke="#0E7A76" stroke-width="4"/>
+    <path d="M168 158C161.882 158 156.922 162.96 156.922 169.078V292.906C146.827 297.98 140 308.362 140 320.391C140 337.316 153.722 351.039 170.648 351.039C187.573 351.039 201.296 337.316 201.296 320.391C201.296 308.369 194.476 297.994 184.392 292.919V169.078C184.392 162.96 179.432 158 173.314 158H168Z" fill="#1AA098" stroke="#F2F4F5" stroke-width="9"/>
+    <path d="M170 180V313" stroke="#F2F4F5" stroke-width="9" stroke-linecap="round"/>
+    <circle cx="170" cy="322" r="18" fill="#FFD128" stroke="#F2F4F5" stroke-width="8"/>
+  </g>
+  <g stroke="#F2F4F5" stroke-width="7" stroke-linecap="round">
+    <path d="M102 169H119"/>
+    <path d="M102 198H119"/>
+  </g>
+  <text x="430" y="286" fill="#111827" font-family="Segoe UI, Arial, sans-serif" font-size="104" font-weight="700">Climate Manager</text>
+</svg>
