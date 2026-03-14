@@ -318,6 +318,17 @@ class ClimateManager:
             profile,
         )
         return weighted
+    @property
+    def current_set_temperature(self) -> float | None:
+        """Return the thermostat current primary set temperature."""
+        thermostat = self._thermostat_snapshot()
+        if not thermostat.available:
+            return None
+        if thermostat.target_temp is not None:
+            return thermostat.target_temp
+        if thermostat.target_temp_low is not None:
+            return thermostat.target_temp_low
+        return thermostat.target_temp_high
     def _thermostat_snapshot(self) -> ThermostatSnapshot:
         state = self.hass.states.get(self.config.thermostat_entity)
         if state is None or state.state in {"unavailable", "unknown"}:
@@ -564,5 +575,8 @@ class ClimateManager:
     async def _async_save_runtime(self, *_: Any) -> None:
         self._save_handle = None
         await self._runtime_store.async_save(self.runtime)
+
+
+
 
 

@@ -38,6 +38,13 @@ SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
         value_fn=lambda manager: manager.runtime.desired_hvac_mode,
     ),
     ClimateManagerSensorDescription(
+        key="current_set_temp",
+        translation_key="current_set_temp",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        value_fn=lambda manager: _temperature_or_zero(manager.current_set_temperature),
+    ),
+    ClimateManagerSensorDescription(
         key="target_heat",
         translation_key="target_heat",
         device_class=SensorDeviceClass.TEMPERATURE,

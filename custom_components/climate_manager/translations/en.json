@@ -93,6 +93,7 @@
     "sensor": {
       "active_profile": {"name": "Active profile"},
       "desired_hvac_mode": {"name": "Desired HVAC mode"},
+      "current_set_temp": {"name": "Current set temp"},
       "target_heat": {"name": "Target heat"},
       "target_cool": {"name": "Target cool"},
       "comfort_offset": {"name": "Comfort offset"},
@@ -119,8 +120,3 @@
     }
   }
 }
-
-
-
-
-
