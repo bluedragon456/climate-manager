@@ -26,6 +26,49 @@ def _temperature_or_zero(value: float | None) -> float:
     return value
 
 
+def _humanize_token(value: str) -> str:
+    return value.replace("_", " ").replace(":", " ").strip().title()
+
+
+def _humanize_hvac_mode(manager: ClimateManager) -> str:
+    value = manager.runtime.desired_hvac_mode
+    if value is not None:
+        labels = {
+            "heat": "Heat",
+            "cool": "Cool",
+            "off": "Off",
+            "heat_cool": "Auto",
+        }
+        return labels.get(value, _humanize_token(value))
+
+    profile_labels = {
+        "manual_override": "User override",
+        "override_lock": "Override lock",
+        "paused": "Paused",
+    }
+    return profile_labels.get(manager.runtime.active_profile, "Unknown")
+
+
+def _humanize_last_action(manager: ClimateManager) -> str | None:
+    value = manager.last_action
+    if value is None:
+        return None
+    if value == "clear_override":
+        return "Cleared override"
+    if value == "set_temporary_override":
+        return "Started temporary override"
+    if value == "pause":
+        return "Paused smart control"
+    if value == "resume":
+        return "Resumed smart control"
+    if value.startswith("set_hvac_mode:"):
+        mode = value.split(":", 1)[1]
+        return f"Set HVAC mode to {_humanize_token(mode)}"
+    if value.startswith("set_temperature:"):
+        return "Adjusted thermostat setpoint"
+    return _humanize_token(value)
+
+
 SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
     ClimateManagerSensorDescription(
         key="active_profile",
@@ -35,7 +78,7 @@ SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
     ClimateManagerSensorDescription(
         key="desired_hvac_mode",
         translation_key="desired_hvac_mode",
-        value_fn=lambda manager: manager.runtime.desired_hvac_mode,
+        value_fn=_humanize_hvac_mode,
     ),
     ClimateManagerSensorDescription(
         key="current_set_temp",
@@ -90,7 +133,7 @@ SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
     ClimateManagerSensorDescription(
         key="last_action",
         translation_key="last_action",
-        value_fn=lambda manager: manager.last_action,
+        value_fn=_humanize_last_action,
     ),
 )
 
@@ -121,6 +164,17 @@ class ClimateManagerSensor(ClimateManagerEntity, SensorEntity):
     @property
     def native_value(self):
         return self.entity_description.value_fn(self._manager)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        if self.entity_description.key == "desired_hvac_mode":
+            return {
+                "raw_value": self._manager.runtime.desired_hvac_mode,
+                "active_profile": self._manager.runtime.active_profile,
+            }
+        if self.entity_description.key == "last_action":
+            return {"raw_value": self._manager.last_action}
+        return None
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(self._manager.async_subscribe(self.async_write_ha_state))
