@@ -198,12 +198,13 @@ class ClimateManagerOptionsFlow(config_entries.OptionsFlow):
     """Handle Climate Manager options."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        self.config_entry = config_entry
+        self._config_entry = config_entry
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         """Manage options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        defaults = _normalize_options({**self.config_entry.data, **self.config_entry.options})
+        defaults = _normalize_options({**self._config_entry.data, **self._config_entry.options})
         return self.async_show_form(step_id="init", data_schema=_build_options_schema(defaults))
+
