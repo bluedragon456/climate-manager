@@ -32,6 +32,8 @@ from .const import (
     WINDOWS_ACTION_COOL_SETBACK,
     WINDOWS_ACTION_HEAT_SETBACK,
     WINDOWS_ACTION_OFF,
+    WINDOWS_FREEZE_PROTECTION_HEAT_TARGET,
+    WINDOWS_FREEZE_PROTECTION_OUTDOOR_TEMP,
 )
 from .helpers import clamp, curve_weight_for_profile, nearly_equal, now, state_float, state_is_on, state_text
 from .models import ManagerConfig, RuntimeState, ThermostatSnapshot
@@ -247,6 +249,8 @@ class ClimateManager:
             return None
         if profile == PROFILE_SENSORS_OPEN:
             if self.config.windows_action == WINDOWS_ACTION_OFF:
+                if self._should_use_freeze_protection():
+                    return HVAC_PREF_HEAT
                 return HVAC_PREF_OFF
             if self.config.windows_action == WINDOWS_ACTION_HEAT_SETBACK:
                 return HVAC_PREF_HEAT
@@ -266,7 +270,10 @@ class ClimateManager:
         base_cool = None
         if profile not in {PROFILE_PAUSED, PROFILE_OVERRIDE_LOCK, PROFILE_MANUAL_OVERRIDE}:
             if profile == PROFILE_SENSORS_OPEN:
-                base_heat = self.config.min_heat_target
+                if self.config.windows_action == WINDOWS_ACTION_OFF and self._should_use_freeze_protection():
+                    base_heat = min(WINDOWS_FREEZE_PROTECTION_HEAT_TARGET, self.config.max_heat_target)
+                else:
+                    base_heat = self.config.min_heat_target
                 base_cool = self.config.max_cool_target
             elif profile == PROFILE_AWAY:
                 base_heat = self.config.heat_away
@@ -283,7 +290,10 @@ class ClimateManager:
         heat_offset = self._resolve_heat_curve_offset(profile)
         self.runtime.comfort_offset = heat_offset
         if desired_mode in {HVAC_PREF_HEAT, "heat_cool"} and base_heat is not None:
-            base_heat = clamp(base_heat + heat_offset, self.config.min_heat_target, self.config.max_heat_target)
+            if profile == PROFILE_SENSORS_OPEN and self.config.windows_action == WINDOWS_ACTION_OFF and self._should_use_freeze_protection():
+                base_heat = clamp(base_heat, 30.0, self.config.max_heat_target)
+            else:
+                base_heat = clamp(base_heat + heat_offset, self.config.min_heat_target, self.config.max_heat_target)
         if desired_mode in {HVAC_PREF_COOL, "heat_cool"} and base_cool is not None:
             base_cool = clamp(base_cool, self.config.min_cool_target, self.config.max_cool_target)
         if desired_mode == HVAC_PREF_HEAT:
@@ -295,6 +305,10 @@ class ClimateManager:
                 base_cool = base_heat + 2.0
             return base_heat, base_cool
         return None, None
+    def _should_use_freeze_protection(self) -> bool:
+        season = (state_text(self.hass, self.config.season_entity) or "").lower()
+        outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
+        return season == "winter" and outdoor is not None and outdoor <= WINDOWS_FREEZE_PROTECTION_OUTDOOR_TEMP
     def _resolve_heat_curve_offset(self, profile: str) -> float:
         outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
         if outdoor is None:

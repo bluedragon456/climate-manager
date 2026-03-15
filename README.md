@@ -131,6 +131,8 @@ If a configured window or door sensor stays open past the configured delay, Clim
 - Apply a heat setback
 - Apply a cool setback
 
+If the windows action is set to `off`, Climate Manager still protects against frozen pipes by switching to `heat` at 50 F whenever the season entity reports `winter` and the outdoor temperature is 50 F or below.
+
 When the sensor closes, Climate Manager waits for the restore buffer before resuming normal control.
 
 ## Entities created
