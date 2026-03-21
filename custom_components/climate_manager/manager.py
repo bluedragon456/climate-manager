@@ -59,6 +59,11 @@ class ClimateManager:
         self._last_command_snapshot: dict[str, float | str | None] | None = None
         self._last_command_time: Any = None
         self._active_manual_override_snapshot: dict[str, float | str | None] | None = None
+    def _log_manual_diagnostics(self, message: str, *args: Any) -> None:
+        if self.config.debug_manual_detection:
+            _LOGGER.info(message, *args)
+            return
+        _LOGGER.debug(message, *args)
     async def async_initialize(self) -> None:
         """Initialize manager and listeners."""
         self.runtime = await self._runtime_store.async_load()
@@ -384,6 +389,29 @@ class ClimateManager:
             and nearly_equal(left.get("target_temp_low"), right.get("target_temp_low"), self.config.temp_change_threshold)
             and nearly_equal(left.get("target_temp_high"), right.get("target_temp_high"), self.config.temp_change_threshold)
         )
+    def _manual_snapshot_field_changes(
+        self,
+        current_snapshot: dict[str, float | str | None],
+        baseline_snapshot: dict[str, float | str | None],
+    ) -> dict[str, bool]:
+        return {
+            "hvac_mode": current_snapshot.get("hvac_mode") != baseline_snapshot.get("hvac_mode"),
+            "temperature": not nearly_equal(
+                current_snapshot.get("temperature"),
+                baseline_snapshot.get("temperature"),
+                self.config.temp_change_threshold,
+            ),
+            "target_temp_low": not nearly_equal(
+                current_snapshot.get("target_temp_low"),
+                baseline_snapshot.get("target_temp_low"),
+                self.config.temp_change_threshold,
+            ),
+            "target_temp_high": not nearly_equal(
+                current_snapshot.get("target_temp_high"),
+                baseline_snapshot.get("target_temp_high"),
+                self.config.temp_change_threshold,
+            ),
+        }
     def _meaningful_snapshot_change(
         self,
         current_snapshot: dict[str, float | str | None],
@@ -424,6 +452,7 @@ class ClimateManager:
         return {"hvac_mode": None, "temperature": None, "target_temp_low": None, "target_temp_high": None}
     def _store_command_snapshot(
         self,
+        source: str,
         *,
         hvac_mode: str | object = _UNSET,
         temperature: float | None | object = _UNSET,
@@ -441,17 +470,89 @@ class ClimateManager:
             snapshot["target_temp_high"] = target_temp_high
         self._last_command_snapshot = snapshot
         self._last_command_time = now()
+        self._log_manual_diagnostics(
+            "Stored command snapshot for %s: source=%s snapshot=%s command_time=%s",
+            self.entry_id,
+            source,
+            self._last_command_snapshot,
+            self._last_command_time.isoformat(),
+        )
+    def _log_manual_detection_event(
+        self,
+        *,
+        reason: str,
+        thermostat_snapshot: dict[str, float | str | None],
+        commanded_snapshot: dict[str, float | str | None] | None,
+        command_time: Any,
+        grace_until: Any,
+        settle_until: Any,
+        in_grace_window: bool,
+        in_settle_window: bool,
+        mode_changed: bool,
+        temp_changed: bool,
+        override_activated: bool,
+        field_changes: dict[str, bool] | None,
+        outcome: str,
+    ) -> None:
+        if self.config.debug_manual_detection:
+            _LOGGER.info(
+                "Manual detection event for %s: reason=%s thermostat_snapshot=%s last_commanded_snapshot=%s command_time=%s grace_until=%s settle_until=%s in_grace_window=%s in_settle_window=%s mode_changed=%s temp_changed=%s field_changes=%s override_activated=%s outcome=%s",
+                self.entry_id,
+                reason,
+                thermostat_snapshot,
+                commanded_snapshot,
+                None if command_time is None else command_time.isoformat(),
+                None if grace_until is None else grace_until.isoformat(),
+                None if settle_until is None else settle_until.isoformat(),
+                in_grace_window,
+                in_settle_window,
+                mode_changed,
+                temp_changed,
+                field_changes,
+                override_activated,
+                outcome,
+            )
+            return
+        _LOGGER.debug(
+            "Manual detection event for %s: reason=%s thermostat_snapshot=%s last_commanded_snapshot=%s command_time=%s grace_until=%s settle_until=%s in_grace_window=%s in_settle_window=%s mode_changed=%s temp_changed=%s field_changes=%s override_activated=%s outcome=%s",
+            self.entry_id,
+            reason,
+            thermostat_snapshot,
+            commanded_snapshot,
+            None if command_time is None else command_time.isoformat(),
+            None if grace_until is None else grace_until.isoformat(),
+            None if settle_until is None else settle_until.isoformat(),
+            in_grace_window,
+            in_settle_window,
+            mode_changed,
+            temp_changed,
+            field_changes,
+            override_activated,
+            outcome,
+        )
     def _detect_manual_change(self, reason: str, thermostat: ThermostatSnapshot) -> None:
         thermostat_snapshot = self._manual_detection_snapshot(thermostat)
         commanded_snapshot = self._last_command_snapshot
         command_time = self._last_command_time
         if commanded_snapshot is None or command_time is None:
-            _LOGGER.debug(
-                "Manual detection skipped for %s: reason=%s thermostat_snapshot=%s last_commanded_snapshot=%s no_in_memory_command_baseline=True",
-                self.entry_id,
+            self._log_manual_detection_event(
+                reason=reason,
+                thermostat_snapshot=thermostat_snapshot,
+                commanded_snapshot=commanded_snapshot,
+                command_time=command_time,
+                grace_until=None,
+                settle_until=None,
+                in_grace_window=False,
+                in_settle_window=False,
+                mode_changed=False,
+                temp_changed=False,
+                override_activated=False,
+                field_changes=None,
+                outcome="skipped:no_in_memory_command_baseline",
+            )
+            self._log_manual_diagnostics(
+                "Manual detection skipped for %s because no in-memory command baseline is available",
                 reason,
-                thermostat_snapshot,
-                commanded_snapshot,
             )
             return
         current_time = now()
@@ -459,41 +560,57 @@ class ClimateManager:
         settle_window = command_time + timedelta(seconds=self._self_echo_settle_seconds())
         in_grace_window = current_time <= grace_window
         in_settle_window = current_time <= settle_window
-        _LOGGER.debug(
-            "Manual detection evaluating for %s: reason=%s thermostat_snapshot=%s last_commanded_snapshot=%s command_time=%s grace_until=%s in_grace=%s settle_until=%s in_settle=%s",
-            self.entry_id,
-            reason,
-            thermostat_snapshot,
-            commanded_snapshot,
-            command_time.isoformat(),
-            grace_window.isoformat(),
-            in_grace_window,
-            settle_window.isoformat(),
-            in_settle_window,
-        )
+        field_changes = self._manual_snapshot_field_changes(thermostat_snapshot, commanded_snapshot)
+        mode_changed, temp_changed = self._meaningful_snapshot_change(thermostat_snapshot, commanded_snapshot)
         if in_settle_window and self._manual_snapshot_matches(thermostat_snapshot, commanded_snapshot):
-            _LOGGER.debug(
-                "Manual detection ignored for %s: reason=%s ignored_as_self_echo=True thermostat_snapshot=%s",
-                self.entry_id,
-                reason,
-                thermostat_snapshot,
+            self._log_manual_detection_event(
+                reason=reason,
+                thermostat_snapshot=thermostat_snapshot,
+                commanded_snapshot=commanded_snapshot,
+                command_time=command_time,
+                grace_until=grace_window,
+                settle_until=settle_window,
+                in_grace_window=in_grace_window,
+                in_settle_window=in_settle_window,
+                mode_changed=mode_changed,
+                temp_changed=temp_changed,
+                override_activated=False,
+                field_changes=field_changes,
+                outcome="ignored:self_echo",
             )
             return
         if in_grace_window:
-            _LOGGER.debug(
-                "Manual detection ignored for %s: reason=%s ignored_by_grace_window=True",
-                self.entry_id,
-                reason,
+            self._log_manual_detection_event(
+                reason=reason,
+                thermostat_snapshot=thermostat_snapshot,
+                commanded_snapshot=commanded_snapshot,
+                command_time=command_time,
+                grace_until=grace_window,
+                settle_until=settle_window,
+                in_grace_window=in_grace_window,
+                in_settle_window=in_settle_window,
+                mode_changed=mode_changed,
+                temp_changed=temp_changed,
+                override_activated=False,
+                field_changes=field_changes,
+                outcome="ignored:grace_window",
             )
             return
-        mode_changed, temp_changed = self._meaningful_snapshot_change(thermostat_snapshot, commanded_snapshot)
         if not mode_changed and not temp_changed:
-            _LOGGER.debug(
-                "Manual detection ignored for %s: reason=%s ignored_as_insignificant=True thermostat_snapshot=%s last_commanded_snapshot=%s",
-                self.entry_id,
-                reason,
-                thermostat_snapshot,
-                commanded_snapshot,
+            self._log_manual_detection_event(
+                reason=reason,
+                thermostat_snapshot=thermostat_snapshot,
+                commanded_snapshot=commanded_snapshot,
+                command_time=command_time,
+                grace_until=grace_window,
+                settle_until=settle_window,
+                in_grace_window=in_grace_window,
+                in_settle_window=in_settle_window,
+                mode_changed=mode_changed,
+                temp_changed=temp_changed,
+                override_activated=False,
+                field_changes=field_changes,
+                outcome="ignored:insignificant",
             )
             return
         manual_reason = "manual hvac mode change detected" if mode_changed else "manual temperature change detected"
@@ -503,15 +620,20 @@ class ClimateManager:
             manual_reason,
             thermostat_snapshot,
         )
-        _LOGGER.info(
-            "Manual detection result for %s: reason=%s thermostat_snapshot=%s last_commanded_snapshot=%s treated_as_manual_override=%s mode_changed=%s temp_changed=%s",
-            self.entry_id,
-            reason,
-            thermostat_snapshot,
-            commanded_snapshot,
-            treated_as_manual_override,
-            mode_changed,
-            temp_changed,
+        self._log_manual_detection_event(
+            reason=reason,
+            thermostat_snapshot=thermostat_snapshot,
+            commanded_snapshot=commanded_snapshot,
+            command_time=command_time,
+            grace_until=grace_window,
+            settle_until=settle_window,
+            in_grace_window=in_grace_window,
+            in_settle_window=in_settle_window,
+            mode_changed=mode_changed,
+            temp_changed=temp_changed,
+            override_activated=treated_as_manual_override,
+            field_changes=field_changes,
+            outcome="manual_override" if treated_as_manual_override else "ignored:duplicate_active_override",
         )
     def _apply_manual_behavior(
         self,
@@ -674,7 +796,7 @@ class ClimateManager:
             {ATTR_ENTITY_ID: self.config.thermostat_entity, "hvac_mode": hvac_mode},
             blocking=True,
         )
-        self._store_command_snapshot(hvac_mode=hvac_mode)
+        self._store_command_snapshot("set_hvac_mode", hvac_mode=hvac_mode)
         self.runtime.last_commanded_hvac_mode = hvac_mode
         self.runtime.last_command_time = self._last_command_time
     async def _async_set_temperature(
@@ -694,6 +816,7 @@ class ClimateManager:
         _LOGGER.debug("Applying temperature payload %s to %s", data, self.config.thermostat_entity)
         await self.hass.services.async_call("climate", "set_temperature", data, blocking=True)
         self._store_command_snapshot(
+            "set_temperature",
             temperature=temperature if temperature is not None else _UNSET,
             target_temp_low=target_temp_low if target_temp_low is not None else _UNSET,
             target_temp_high=target_temp_high if target_temp_high is not None else _UNSET,
@@ -720,6 +843,3 @@ class ClimateManager:
     async def _async_save_runtime(self, *_: Any) -> None:
         self._save_handle = None
         await self._runtime_store.async_save(self.runtime)
-
-
-

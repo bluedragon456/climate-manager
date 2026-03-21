@@ -52,6 +52,7 @@ class ManagerConfig:
     cancel_override_on_away: bool = True
     cancel_override_on_windows: bool = True
     cancel_override_on_sleep: bool = False
+    debug_manual_detection: bool = False
 
 
 @dataclass(slots=True)
@@ -85,5 +86,4 @@ class ThermostatSnapshot:
     target_temp_high: float | None
     current_temperature: float | None
     available: bool
-
 

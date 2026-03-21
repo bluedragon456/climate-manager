@@ -66,6 +66,7 @@ def _normalize_options(defaults: dict[str, Any] | None = None) -> dict[str, Any]
         CONF_CANCEL_OVERRIDE_ON_AWAY: bool(data.get(CONF_CANCEL_OVERRIDE_ON_AWAY, DEFAULT_CANCEL_OVERRIDE_ON_AWAY)),
         CONF_CANCEL_OVERRIDE_ON_WINDOWS: bool(data.get(CONF_CANCEL_OVERRIDE_ON_WINDOWS, DEFAULT_CANCEL_OVERRIDE_ON_WINDOWS)),
         CONF_CANCEL_OVERRIDE_ON_SLEEP: bool(data.get(CONF_CANCEL_OVERRIDE_ON_SLEEP, DEFAULT_CANCEL_OVERRIDE_ON_SLEEP)),
+        CONF_DEBUG_MANUAL_DETECTION: bool(data.get(CONF_DEBUG_MANUAL_DETECTION, DEFAULT_DEBUG_MANUAL_DETECTION)),
     }
 
 
@@ -141,6 +142,7 @@ def _build_options_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(CONF_CANCEL_OVERRIDE_ON_AWAY, default=defaults[CONF_CANCEL_OVERRIDE_ON_AWAY]): selector.BooleanSelector(),
             vol.Required(CONF_CANCEL_OVERRIDE_ON_WINDOWS, default=defaults[CONF_CANCEL_OVERRIDE_ON_WINDOWS]): selector.BooleanSelector(),
             vol.Required(CONF_CANCEL_OVERRIDE_ON_SLEEP, default=defaults[CONF_CANCEL_OVERRIDE_ON_SLEEP]): selector.BooleanSelector(),
+            vol.Required(CONF_DEBUG_MANUAL_DETECTION, default=defaults[CONF_DEBUG_MANUAL_DETECTION]): selector.BooleanSelector(),
         }
     )
 
@@ -207,4 +209,3 @@ class ClimateManagerOptionsFlow(config_entries.OptionsFlow):
 
         defaults = _normalize_options({**self._config_entry.data, **self._config_entry.options})
         return self.async_show_form(step_id="init", data_schema=_build_options_schema(defaults))
-

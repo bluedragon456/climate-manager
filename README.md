@@ -1,141 +1,26 @@
 # Climate Manager
 
-Climate Manager is a Home Assistant custom integration that adds a comfort-focused control layer on top of an existing thermostat. Instead of building and maintaining a pile of helpers and automations, you configure one integration that reacts to occupancy, sleep, guest mode, open windows, outdoor temperature, and manual thermostat changes.
+Climate Manager is a Home Assistant custom integration that manages an existing thermostat using profile-based targets and a small set of helper entities. It does not replace your thermostat entity. Instead, it watches your thermostat and optional context signals like sleep, away, guest, override lock, windows, and season, then applies the temperature or HVAC mode you want for the current situation.
 
-It is designed for people who already have a working thermostat in Home Assistant and want smarter target management without replacing the thermostat entity itself.
+This integration is a good fit if you already have a working `climate` entity in Home Assistant and want smarter target management without building a large automation stack by hand.
 
-## What it does
+## Current Status
 
-- Wraps an existing `climate` entity with profile-based temperature control
-- Supports `home`, `sleep`, `guest`, `away`, `manual override`, `windows open`, and `paused` states
-- Applies a weather-aware heating comfort curve using an outdoor temperature sensor
-- Detects manual temperature or HVAC mode changes at the thermostat
-- Can treat manual changes as ignore, temporary override, or hold-until-cleared
+Climate Manager currently:
+
+- Controls an existing thermostat entity
+- Supports `home`, `sleep`, `guest`, `away`, `manual override`, `override lock`, `windows open`, and `paused` states
+- Applies a heating comfort offset based on outdoor temperature
+- Detects manual thermostat setpoint and HVAC mode changes
+- Can ignore manual changes, treat them as a temporary override, or hold them until cleared
 - Exposes status sensors, control buttons, a master enable switch, and services
-- Persists runtime state so temporary overrides and pause state survive reloads and restarts
+- Persists runtime state across reloads and Home Assistant restarts
 
-## Best fit
+Current integration version: `1.1.14`
 
-Climate Manager works best if you already have:
+## What It Creates
 
-- A thermostat entity in Home Assistant
-- An outdoor temperature sensor
-- Optional helper entities for sleep, away, guest, season, and open windows or doors
-
-It is especially useful if you want the thermostat to feel more adaptive without building separate automations for every condition.
-
-## Installation
-
-### HACS
-
-Repository URL: `https://github.com/bluedragon456/climate-manager`
-
-1. Open HACS.
-2. Go to the menu and select **Custom repositories**.
-3. Add this repository URL and choose **Integration**.
-4. Install **Climate Manager**.
-5. Restart Home Assistant.
-6. Go to **Settings > Devices & Services**.
-7. Select **Add Integration** and search for **Climate Manager**.
-
-### Manual
-
-Copy `custom_components/climate_manager` into:
-
-```text
-/config/custom_components/climate_manager
-```
-
-Restart Home Assistant, then add the integration from **Settings > Devices & Services**.
-
-## Configuration
-
-Climate Manager is configured through the UI. There is no YAML setup.
-
-### Required during setup
-
-- `Thermostat`: the `climate` entity Climate Manager should control
-- `Outdoor temperature sensor`: used for the heating comfort curve
-
-### Optional during setup
-
-- `Sleep schedule`: a `schedule` entity for sleep mode
-- `Away mode boolean`: an `input_boolean` for away mode
-- `Guest mode boolean`: an `input_boolean` for guest mode
-- `Manual climate lock boolean`: an `input_boolean` that forces Climate Manager into override-lock mode
-- `Window or door open sensor`: a `binary_sensor` used for HVAC backoff
-- `Season source`: an `input_text`, `sensor`, or `select` used when HVAC preference is `Auto`
-
-### Recommended example entities
-
-- `climate.living_room_thermostat`
-- `sensor.outdoor_temperature`
-- `schedule.climate_sleep`
-- `input_boolean.away_mode`
-- `input_boolean.guest_mode`
-- `input_boolean.climate_override_lock`
-- `binary_sensor.window_or_door_open`
-- `input_text.season_mode`
-
-## Options you can tune
-
-After setup, the options flow lets you tune the integration without editing YAML:
-
-- Heat targets for home, sleep, guest, and away
-- Cool targets for home, sleep, guest, and away
-- HVAC preference: `Auto`, `Heat`, `Cool`, or `Off`
-- Four outdoor temperature curve bands with configurable offsets
-- Per-profile curve weights
-- Manual temperature change behavior
-- Manual HVAC mode change behavior
-- Temporary override duration
-- Manual change grace period
-- Window-open delay before backoff activates
-- Window-close restore buffer
-- Minimum and maximum heat or cool limits
-- Temperature change threshold for manual-change detection
-- Whether overrides are canceled by away, sleep, or window backoff
-
-## How profile selection works
-
-Climate Manager evaluates conditions in this priority order:
-
-1. Paused or smart control disabled
-2. Override-lock boolean is on
-3. Manual override is active
-4. Window or door backoff is active
-5. Away mode
-6. Guest mode
-7. Sleep schedule
-8. Home
-
-That makes behavior predictable and easier to debug from the exposed status sensors.
-
-## Manual override behavior
-
-When somebody changes the thermostat directly, Climate Manager compares that change to the last command it sent.
-
-You can choose how it responds:
-
-- `Ignore`: keep controlling normally
-- `Temporary override`: stop controlling until the override expires
-- `Hold until cleared`: stop controlling until you clear the override
-
-You can also create a temporary override explicitly with the built-in service.
-
-## Window and door handling
-
-If a configured window or door sensor stays open past the configured delay, Climate Manager can:
-
-- Turn HVAC off
-- Apply a heat setback
-- Apply a cool setback
-
-If the windows action is set to `off`, Climate Manager still protects against frozen pipes by switching to `heat` at 50 F whenever the season entity reports `winter` and the outdoor temperature is 50 F or below.
-
-When the sensor closes, Climate Manager waits for the restore buffer before resuming normal control.
-
-## Entities created
+For each config entry, Climate Manager creates:
 
 ### Sensors
 
@@ -151,7 +36,7 @@ When the sensor closes, Climate Manager waits for the restore buffer before resu
 - `Last reason`
 - `Last action`
 
-### Binary sensors
+### Binary Sensors
 
 - `Smart control active`
 - `Manual override active`
@@ -169,7 +54,156 @@ When the sensor closes, Climate Manager waits for the restore buffer before resu
 
 - `Enabled`
 
-Turning the `Enabled` switch off pauses Climate Manager. Turning it back on resumes smart control.
+Turning `Enabled` off pauses Climate Manager. Turning it back on resumes control.
+
+## Installation
+
+### HACS
+
+Repository URL: `https://github.com/bluedragon456/climate-manager`
+
+1. Open HACS.
+2. Go to **Custom repositories**.
+3. Add this repository as an **Integration**.
+4. Install **Climate Manager**.
+5. Restart Home Assistant.
+6. Go to **Settings > Devices & Services**.
+7. Add the **Climate Manager** integration.
+
+### Manual
+
+Copy `custom_components/climate_manager` to:
+
+```text
+/config/custom_components/climate_manager
+```
+
+Restart Home Assistant, then add the integration from **Settings > Devices & Services**.
+
+## Configuration
+
+Climate Manager is configured through the UI only. There is no YAML setup.
+
+### Required During Setup
+
+- `Thermostat`: a `climate` entity
+- `Outdoor temperature sensor`: a `sensor` entity
+
+### Optional During Setup
+
+- `Sleep schedule`: a `schedule` entity
+- `Away mode boolean`: an `input_boolean`
+- `Guest mode boolean`: an `input_boolean`
+- `Manual climate lock boolean`: an `input_boolean`
+- `Window or door open sensor`: a `binary_sensor`
+- `Season source`: an `input_text`, `sensor`, or `select`
+
+### Example Helpers
+
+- `climate.living_room`
+- `sensor.outdoor_temperature`
+- `schedule.climate_sleep`
+- `input_boolean.away_mode`
+- `input_boolean.guest_mode`
+- `input_boolean.climate_override_lock`
+- `binary_sensor.window_open`
+- `input_text.season_mode`
+
+## Options
+
+The options flow lets you tune:
+
+- Home, sleep, guest, and away heat targets
+- Home, sleep, guest, and away cool targets
+- HVAC preference: `Auto`, `Heat`, `Cool`, or `Off`
+- Four outdoor-temperature heating curve bands and offsets
+- Per-profile curve weights
+- Manual temperature change behavior
+- Manual HVAC mode change behavior
+- Temporary override duration
+- Manual change grace period
+- Window-open delay
+- Window-close restore delay
+- Windows action: `Turn HVAC off`, `Heat setback`, or `Cool setback`
+- Min and max heat targets
+- Min and max cool targets
+- Meaningful temperature change threshold
+- Whether overrides are canceled by away, sleep, or windows backoff
+- Manual detection diagnostics logging
+
+## Profile Priority
+
+Climate Manager resolves the active profile in this order:
+
+1. Smart control disabled or paused
+2. Override lock
+3. Manual override
+4. Windows backoff
+5. Away
+6. Guest
+7. Sleep
+8. Home
+
+## HVAC Mode Selection
+
+- If HVAC preference is `Heat`, `Cool`, or `Off`, that mode is used directly.
+- If HVAC preference is `Auto`, the season entity is used when available:
+  - `winter` -> `heat`
+  - `summer` -> `cool`
+  - anything else -> `heat_cool`
+- During manual override, override lock, or paused mode, Climate Manager stops applying changes.
+
+## Manual Change Handling
+
+When the thermostat changes, Climate Manager compares the new thermostat state to the last command it sent. You can configure both temperature changes and HVAC mode changes to be handled as:
+
+- `Ignore`
+- `Temporary override`
+- `Hold until cleared`
+
+Temporary overrides expire automatically. Hold overrides remain active until cleared from the button or service.
+
+### Manual Detection Diagnostics
+
+Climate Manager includes a built-in support logging mode for false manual override reports.
+
+Enable `Manual detection diagnostics` in the integration options when you want users to capture troubleshooting logs without turning on broad Home Assistant debug logging.
+
+When enabled, Climate Manager writes support-focused log entries to the normal Home Assistant log for:
+
+- Every stored command snapshot from `set_hvac_mode`
+- Every stored command snapshot from `set_temperature`
+- Every thermostat-triggered manual detection evaluation
+
+Each manual detection event includes:
+
+- `reason`
+- `thermostat_snapshot`
+- `last_commanded_snapshot`
+- `command_time`
+- `grace_until`
+- `settle_until`
+- `in_grace_window`
+- `in_settle_window`
+- `mode_changed`
+- `temp_changed`
+- `field_changes`
+- `override_activated`
+- `outcome`
+
+This is especially useful for diagnosing thermostats like Ecobee that may echo delayed setpoint changes or apply schedule-driven changes after Climate Manager sends a command.
+
+## Window and Door Backoff
+
+If a configured window or door sensor remains open long enough to pass the configured delay, Climate Manager can:
+
+- Turn HVAC off
+- Apply a heat setback
+- Apply a cool setback
+
+If windows action is `off`, there is still a freeze-protection behavior: when the season entity reports `winter` and outdoor temperature is `50 F` or below, Climate Manager will hold heat at `50 F` instead of fully shutting off.
+
+When the sensor closes, Climate Manager waits for the configured restore delay before returning to normal control.
 
 ## Services
 
@@ -181,9 +215,9 @@ Climate Manager registers these services:
 - `climate_manager.resume`
 - `climate_manager.set_temporary_override`
 
-If you only have one Climate Manager instance loaded, `entry_id` is optional. If you have multiple instances, include the `entry_id`.
+`entry_id` can be omitted if exactly one Climate Manager instance is loaded. If multiple instances are loaded, include `entry_id`.
 
-### Example: temporary override
+### Example Service Call
 
 ```yaml
 service: climate_manager.set_temporary_override
@@ -193,31 +227,28 @@ data:
   hvac_mode: heat
 ```
 
-## Fail-safe behavior
+## Notes and Limitations
 
-If the thermostat becomes unavailable, Climate Manager stops applying changes and exposes that state through the `Fail-safe active` binary sensor and `Status` sensor. Once the thermostat becomes available again, normal recalculation resumes.
-
-## Notes
-
-- Climate Manager controls your existing thermostat; it does not create a replacement climate entity
-- Outdoor temperature currently affects the heating comfort curve
-- In `Auto` HVAC preference, the season source is used to prefer `heat` for `winter`, `cool` for `summer`, and `heat_cool` otherwise
-- Runtime state such as temporary override timers and pause state is restored after restart
+- Climate Manager controls your existing thermostat; it does not create a replacement `climate` entity.
+- The outdoor temperature curve currently affects heating targets only.
+- Cooling targets are profile-based and clamped by your configured min and max values.
+- Auto mode works best when the season entity reports values like `winter` or `summer`.
+- If the thermostat is unavailable, Climate Manager stops applying changes and exposes that through `Fail-safe active` and `Status`.
 
 ## Troubleshooting
 
-### It is not changing my thermostat
+### Thermostat Is Not Changing
 
-Check these first:
+Check:
 
-- The configured thermostat entity is available
-- The integration is not paused
+- The thermostat entity is available
+- Climate Manager is not paused
 - A manual override is not active
-- The override-lock boolean is not on
-- A windows-open backoff is not active
-- The thermostat supports the HVAC mode and temperature fields Climate Manager is trying to set
+- Override lock is not active
+- Windows backoff is not active
+- The thermostat supports the requested HVAC mode and temperature fields
 
-### It keeps going into manual override
+### It Keeps Entering Manual Override
 
 Review:
 
@@ -225,13 +256,34 @@ Review:
 - `Manual HVAC mode change behavior`
 - `Manual change grace seconds`
 - `Meaningful temperature change threshold`
+- `Manual detection diagnostics`
 
-The `Last reason`, `Last action`, `Status`, and `Override until` sensors are the quickest way to understand what happened.
+The fastest sensors to inspect are `Last reason`, `Last action`, `Status`, and `Override until`.
 
-### Auto mode is not choosing the right HVAC mode
+If you are collecting a support report:
 
-If HVAC preference is `Auto`, verify the configured season entity returns a state like `winter` or `summer`. Any other value falls back to `heat_cool`.
+1. Open the Climate Manager integration options.
+2. Turn on `Manual detection diagnostics`.
+3. Restart Home Assistant or reload the integration.
+4. Reproduce the false manual override.
+5. Collect the log lines containing `Stored command snapshot for` and `Manual detection event for`.
+6. Share the block around the false trigger, including a few lines before and after it.
 
-## Version
+The most useful log block includes:
 
-Current integration version: `1.1.8`
+- The `Stored command snapshot for ...` line immediately before the thermostat change
+- The `Manual detection event for ...` line with `override_activated=True` or `outcome=manual_override`
+- The timestamps on both lines
+
+If you prefer broader integration logs, you can still enable Home Assistant logger overrides:
+
+```yaml
+logger:
+  default: info
+  logs:
+    custom_components.climate_manager: debug
+```
+
+### Auto Mode Picks the Wrong HVAC Mode
+
+If HVAC preference is `Auto`, check the season entity state. `winter` maps to `heat`, `summer` maps to `cool`, and any other value falls back to `heat_cool`.

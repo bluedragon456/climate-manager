@@ -60,7 +60,8 @@
           "temp_change_threshold": "Meaningful temperature change threshold",
           "cancel_override_on_away": "Cancel override when away turns on",
           "cancel_override_on_windows": "Cancel override when windows open backoff activates",
-          "cancel_override_on_sleep": "Cancel override when sleep turns on"
+          "cancel_override_on_sleep": "Cancel override when sleep turns on",
+          "debug_manual_detection": "Manual detection diagnostics"
         }
       }
     }

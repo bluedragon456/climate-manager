@@ -87,6 +87,7 @@ def _build_manager_config(entry: ConfigEntry) -> ManagerConfig:
         cancel_override_on_away=raw["cancel_override_on_away"],
         cancel_override_on_windows=raw["cancel_override_on_windows"],
         cancel_override_on_sleep=raw["cancel_override_on_sleep"],
+        debug_manual_detection=raw["debug_manual_detection"],
     )
 
 
