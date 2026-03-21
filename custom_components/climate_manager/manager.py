@@ -40,6 +40,7 @@ from .models import ManagerConfig, RuntimeState, ThermostatSnapshot
 from .restore import RuntimeStore
 _LOGGER = logging.getLogger(__name__)
 _UNSET = object()
+MIN_HEAT_COOL_SPREAD = 5.0
 class ClimateManager:
     """Main runtime manager."""
     def __init__(self, hass: HomeAssistant, entry_id: str, config: ManagerConfig) -> None:
@@ -380,14 +381,58 @@ class ClimateManager:
             "target_temp_low": thermostat.target_temp_low,
             "target_temp_high": thermostat.target_temp_high,
         }
+    def normalize_heat_cool_range(
+        self,
+        target_temp_low: float | None,
+        target_temp_high: float | None,
+    ) -> tuple[float | None, float | None]:
+        if target_temp_low is None or target_temp_high is None:
+            return target_temp_low, target_temp_high
+        spread = target_temp_high - target_temp_low
+        if spread >= MIN_HEAT_COOL_SPREAD:
+            return target_temp_low, target_temp_high
+        midpoint = (target_temp_low + target_temp_high) / 2
+        half_spread = MIN_HEAT_COOL_SPREAD / 2
+        normalized_low = round((midpoint - half_spread) * 2) / 2
+        normalized_high = round((midpoint + half_spread) * 2) / 2
+        if normalized_high - normalized_low < MIN_HEAT_COOL_SPREAD:
+            normalized_high = normalized_low + MIN_HEAT_COOL_SPREAD
+        return normalized_low, normalized_high
+    def is_equivalent_heat_cool_range(
+        self,
+        observed_low: float | None,
+        observed_high: float | None,
+        expected_low: float | None,
+        expected_high: float | None,
+    ) -> bool:
+        normalized_expected_low, normalized_expected_high = self.normalize_heat_cool_range(expected_low, expected_high)
+        return (
+            nearly_equal(observed_low, normalized_expected_low, self.config.temp_change_threshold)
+            and nearly_equal(observed_high, normalized_expected_high, self.config.temp_change_threshold)
+        )
     def _self_echo_settle_seconds(self) -> int:
         return max(self.config.manual_grace_seconds, 1)
     def _manual_snapshot_matches(self, left: dict[str, float | str | None], right: dict[str, float | str | None]) -> bool:
+        left_mode = left.get("hvac_mode")
+        right_mode = right.get("hvac_mode")
+        heat_cool_equivalent = False
+        if left_mode == "heat_cool" or right_mode == "heat_cool":
+            heat_cool_equivalent = self.is_equivalent_heat_cool_range(
+                left.get("target_temp_low"),
+                left.get("target_temp_high"),
+                right.get("target_temp_low"),
+                right.get("target_temp_high"),
+            )
         return (
-            left.get("hvac_mode") == right.get("hvac_mode")
+            left_mode == right_mode
             and nearly_equal(left.get("temperature"), right.get("temperature"), self.config.temp_change_threshold)
-            and nearly_equal(left.get("target_temp_low"), right.get("target_temp_low"), self.config.temp_change_threshold)
-            and nearly_equal(left.get("target_temp_high"), right.get("target_temp_high"), self.config.temp_change_threshold)
+            and (
+                heat_cool_equivalent
+                or (
+                    nearly_equal(left.get("target_temp_low"), right.get("target_temp_low"), self.config.temp_change_threshold)
+                    and nearly_equal(left.get("target_temp_high"), right.get("target_temp_high"), self.config.temp_change_threshold)
+                )
+            )
         )
     def _manual_snapshot_field_changes(
         self,
@@ -422,17 +467,11 @@ class ClimateManager:
         mode_changed = current_mode is not None and baseline_mode is not None and current_mode != baseline_mode
         temp_changed = False
         if current_mode == "heat_cool" or baseline_mode == "heat_cool":
-            temp_changed = not (
-                nearly_equal(
-                    current_snapshot.get("target_temp_low"),
-                    baseline_snapshot.get("target_temp_low"),
-                    self.config.temp_change_threshold,
-                )
-                and nearly_equal(
-                    current_snapshot.get("target_temp_high"),
-                    baseline_snapshot.get("target_temp_high"),
-                    self.config.temp_change_threshold,
-                )
+            temp_changed = not self.is_equivalent_heat_cool_range(
+                current_snapshot.get("target_temp_low"),
+                current_snapshot.get("target_temp_high"),
+                baseline_snapshot.get("target_temp_low"),
+                baseline_snapshot.get("target_temp_high"),
             )
         elif current_mode not in {None, STATE_OFF} or baseline_mode not in {None, STATE_OFF}:
             temp_changed = not nearly_equal(
@@ -492,11 +531,12 @@ class ClimateManager:
         temp_changed: bool,
         override_activated: bool,
         field_changes: dict[str, bool] | None,
+        heat_cool_equivalent: bool | None,
         outcome: str,
     ) -> None:
         if self.config.debug_manual_detection:
             _LOGGER.info(
-                "Manual detection event for %s: reason=%s thermostat_snapshot=%s last_commanded_snapshot=%s command_time=%s grace_until=%s settle_until=%s in_grace_window=%s in_settle_window=%s mode_changed=%s temp_changed=%s field_changes=%s override_activated=%s outcome=%s",
+                "Manual detection event for %s: reason=%s thermostat_snapshot=%s last_commanded_snapshot=%s command_time=%s grace_until=%s settle_until=%s in_grace_window=%s in_settle_window=%s mode_changed=%s temp_changed=%s field_changes=%s heat_cool_equivalent=%s override_activated=%s outcome=%s",
                 self.entry_id,
                 reason,
                 thermostat_snapshot,
@@ -509,12 +549,13 @@ class ClimateManager:
                 mode_changed,
                 temp_changed,
                 field_changes,
+                heat_cool_equivalent,
                 override_activated,
                 outcome,
             )
             return
         _LOGGER.debug(
-            "Manual detection event for %s: reason=%s thermostat_snapshot=%s last_commanded_snapshot=%s command_time=%s grace_until=%s settle_until=%s in_grace_window=%s in_settle_window=%s mode_changed=%s temp_changed=%s field_changes=%s override_activated=%s outcome=%s",
+            "Manual detection event for %s: reason=%s thermostat_snapshot=%s last_commanded_snapshot=%s command_time=%s grace_until=%s settle_until=%s in_grace_window=%s in_settle_window=%s mode_changed=%s temp_changed=%s field_changes=%s heat_cool_equivalent=%s override_activated=%s outcome=%s",
             self.entry_id,
             reason,
             thermostat_snapshot,
@@ -527,6 +568,7 @@ class ClimateManager:
             mode_changed,
             temp_changed,
             field_changes,
+            heat_cool_equivalent,
             override_activated,
             outcome,
         )
@@ -534,6 +576,29 @@ class ClimateManager:
         thermostat_snapshot = self._manual_detection_snapshot(thermostat)
         commanded_snapshot = self._last_command_snapshot
         command_time = self._last_command_time
+        heat_cool_equivalent = None
+        if commanded_snapshot is not None and thermostat_snapshot.get("hvac_mode") == "heat_cool":
+            normalized_low, normalized_high = self.normalize_heat_cool_range(
+                commanded_snapshot.get("target_temp_low"),
+                commanded_snapshot.get("target_temp_high"),
+            )
+            heat_cool_equivalent = self.is_equivalent_heat_cool_range(
+                thermostat_snapshot.get("target_temp_low"),
+                thermostat_snapshot.get("target_temp_high"),
+                commanded_snapshot.get("target_temp_low"),
+                commanded_snapshot.get("target_temp_high"),
+            )
+            self._log_manual_diagnostics(
+                "Heat/cool manual detection comparison for %s: observed_range=(%s, %s) expected_range=(%s, %s) normalized_expected_range=(%s, %s) equivalent_device_normalization=%s",
+                self.entry_id,
+                thermostat_snapshot.get("target_temp_low"),
+                thermostat_snapshot.get("target_temp_high"),
+                commanded_snapshot.get("target_temp_low"),
+                commanded_snapshot.get("target_temp_high"),
+                normalized_low,
+                normalized_high,
+                heat_cool_equivalent,
+            )
         if commanded_snapshot is None or command_time is None:
             self._log_manual_detection_event(
                 reason=reason,
@@ -548,6 +613,7 @@ class ClimateManager:
                 temp_changed=False,
                 override_activated=False,
                 field_changes=None,
+                heat_cool_equivalent=heat_cool_equivalent,
                 outcome="skipped:no_in_memory_command_baseline",
             )
             self._log_manual_diagnostics(
@@ -576,6 +642,7 @@ class ClimateManager:
                 temp_changed=temp_changed,
                 override_activated=False,
                 field_changes=field_changes,
+                heat_cool_equivalent=heat_cool_equivalent,
                 outcome="ignored:self_echo",
             )
             return
@@ -593,6 +660,7 @@ class ClimateManager:
                 temp_changed=temp_changed,
                 override_activated=False,
                 field_changes=field_changes,
+                heat_cool_equivalent=heat_cool_equivalent,
                 outcome="ignored:grace_window",
             )
             return
@@ -610,6 +678,7 @@ class ClimateManager:
                 temp_changed=temp_changed,
                 override_activated=False,
                 field_changes=field_changes,
+                heat_cool_equivalent=heat_cool_equivalent,
                 outcome="ignored:insignificant",
             )
             return
@@ -633,6 +702,7 @@ class ClimateManager:
             temp_changed=temp_changed,
             override_activated=treated_as_manual_override,
             field_changes=field_changes,
+            heat_cool_equivalent=heat_cool_equivalent,
             outcome="manual_override" if treated_as_manual_override else "ignored:duplicate_active_override",
         )
     def _apply_manual_behavior(
@@ -782,11 +852,14 @@ class ClimateManager:
             if not nearly_equal(thermostat.target_temp, target_cool, self.config.temp_change_threshold):
                 await self._async_set_temperature(temperature=target_cool)
         elif desired_mode == "heat_cool" and target_heat is not None and target_cool is not None:
-            if not (
-                nearly_equal(thermostat.target_temp_low, target_heat, self.config.temp_change_threshold)
-                and nearly_equal(thermostat.target_temp_high, target_cool, self.config.temp_change_threshold)
+            normalized_heat, normalized_cool = self.normalize_heat_cool_range(target_heat, target_cool)
+            if not self.is_equivalent_heat_cool_range(
+                thermostat.target_temp_low,
+                thermostat.target_temp_high,
+                normalized_heat,
+                normalized_cool,
             ):
-                await self._async_set_temperature(target_temp_low=target_heat, target_temp_high=target_cool)
+                await self._async_set_temperature(target_temp_low=normalized_heat, target_temp_high=normalized_cool)
     async def _async_set_hvac_mode(self, hvac_mode: str) -> None:
         self.last_action = f"set_hvac_mode:{hvac_mode}"
         _LOGGER.debug("Applying HVAC mode %s to %s", hvac_mode, self.config.thermostat_entity)
@@ -805,6 +878,19 @@ class ClimateManager:
         target_temp_low: float | None = None,
         target_temp_high: float | None = None,
     ) -> None:
+        requested_target_temp_low = target_temp_low
+        requested_target_temp_high = target_temp_high
+        if target_temp_low is not None and target_temp_high is not None:
+            target_temp_low, target_temp_high = self.normalize_heat_cool_range(target_temp_low, target_temp_high)
+            self._log_manual_diagnostics(
+                "Normalizing outgoing heat_cool command for %s: requested_range=(%s, %s) normalized_range=(%s, %s) min_spread=%s",
+                self.entry_id,
+                requested_target_temp_low,
+                requested_target_temp_high,
+                target_temp_low,
+                target_temp_high,
+                MIN_HEAT_COOL_SPREAD,
+            )
         data: dict[str, Any] = {ATTR_ENTITY_ID: self.config.thermostat_entity}
         if temperature is not None:
             data["temperature"] = temperature
