@@ -5,7 +5,7 @@ on:
     inputs:
       version:
         description: "Version to release, for example 1.0.0"
-        required: true
+        required: false
         type: string
 
 permissions:
@@ -26,16 +26,39 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate version input
+      - name: Resolve release version
+        id: resolve_version
         run: |
           python - <<'PY'
+          import json
+          import os
           import re
           import sys
-          version = "${{ github.event.inputs.version }}"
+          from pathlib import Path
+
+          requested_version = "${{ github.event.inputs.version }}".strip()
+          manifest_path = Path("custom_components/climate_manager/manifest.json")
+
+          if requested_version:
+              version = requested_version
+          else:
+              data = json.loads(manifest_path.read_text(encoding="utf-8"))
+              current_version = data["version"]
+              if not re.fullmatch(r"\d+\.\d+\.\d+", current_version):
+                  print(f"Current manifest version is invalid: {current_version}")
+                  sys.exit(1)
+
+              major, minor, patch = map(int, current_version.split("."))
+              version = f"{major}.{minor}.{patch + 1}"
+
           if not re.fullmatch(r"\d+\.\d+\.\d+", version):
               print(f"Invalid version: {version}")
               sys.exit(1)
-          print(f"Version OK: {version}")
+
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          with output_path.open("a", encoding="utf-8") as fh:
+              fh.write(f"version={version}\n")
+          print(f"Resolved release version: {version}")
           PY
 
       - name: Update manifest version
@@ -44,7 +67,7 @@ jobs:
           import json
           from pathlib import Path
 
-          version = "${{ github.event.inputs.version }}"
+          version = "${{ steps.resolve_version.outputs.version }}"
           manifest_path = Path("custom_components/climate_manager/manifest.json")
 
           data = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -58,16 +81,16 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add custom_components/climate_manager/manifest.json
-          git commit -m "Release v${{ github.event.inputs.version }}" || echo "No changes to commit"
+          git commit -m "Release v${{ steps.resolve_version.outputs.version }}" || echo "No changes to commit"
 
       - name: Create and push tag
         run: |
-          git tag "v${{ github.event.inputs.version }}"
+          git tag "v${{ steps.resolve_version.outputs.version }}"
           git push origin main
-          git push origin "v${{ github.event.inputs.version }}"
+          git push origin "v${{ steps.resolve_version.outputs.version }}"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ github.event.inputs.version }}
-          name: v${{ github.event.inputs.version }}
+          tag_name: v${{ steps.resolve_version.outputs.version }}
+          name: v${{ steps.resolve_version.outputs.version }}
