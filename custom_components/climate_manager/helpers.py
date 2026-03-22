@@ -61,16 +61,16 @@ def nearly_equal(left: float | None, right: float | None, threshold: float) -> b
     return abs(left - right) < threshold
 
 
-def curve_weight_for_profile(config: ManagerConfig, profile: str) -> float:
+def curve_weight_for_profile(config: ManagerConfig, profile: str, *, cooling: bool = False) -> float:
     """Get curve weight for a profile."""
     if profile == PROFILE_HOME:
-        return config.curve_weight_home
+        return config.cool_curve_weight_home if cooling else config.curve_weight_home
     if profile == PROFILE_SLEEP:
-        return config.curve_weight_sleep
+        return config.cool_curve_weight_sleep if cooling else config.curve_weight_sleep
     if profile == PROFILE_GUEST:
-        return config.curve_weight_guest
+        return config.cool_curve_weight_guest if cooling else config.curve_weight_guest
     if profile == PROFILE_AWAY:
-        return config.curve_weight_away
+        return config.cool_curve_weight_away if cooling else config.curve_weight_away
     return 0.0
 
 

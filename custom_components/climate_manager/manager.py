@@ -299,14 +299,15 @@ class ClimateManager:
                 base_heat = self.config.heat_home
                 base_cool = self.config.cool_home
         heat_offset = self._resolve_heat_curve_offset(profile)
-        self.runtime.comfort_offset = heat_offset
+        cool_offset = self._resolve_cool_curve_offset(profile)
         if desired_mode in {HVAC_PREF_HEAT, "heat_cool"} and base_heat is not None:
             if profile == PROFILE_SENSORS_OPEN and self.config.windows_action == WINDOWS_ACTION_OFF and self._should_use_freeze_protection():
                 base_heat = clamp(base_heat, 30.0, self.config.max_heat_target)
             else:
                 base_heat = clamp(base_heat + heat_offset, self.config.min_heat_target, self.config.max_heat_target)
         if desired_mode in {HVAC_PREF_COOL, "heat_cool"} and base_cool is not None:
-            base_cool = clamp(base_cool, self.config.min_cool_target, self.config.max_cool_target)
+            base_cool = clamp(base_cool + cool_offset, self.config.min_cool_target, self.config.max_cool_target)
+        self.runtime.comfort_offset = self._resolve_active_comfort_offset(desired_mode, heat_offset, cool_offset)
         if desired_mode == HVAC_PREF_HEAT:
             return base_heat, None
         if desired_mode == HVAC_PREF_COOL:
@@ -343,9 +344,55 @@ class ClimateManager:
             profile,
         )
         return weighted
+    def _resolve_cool_curve_offset(self, profile: str) -> float:
+        outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
+        if outdoor is None:
+            return 0.0
+        if outdoor >= self.config.cool_curve_band_4_min:
+            band_offset = self.config.cool_curve_band_4_offset
+        elif outdoor >= self.config.cool_curve_band_3_min:
+            band_offset = self.config.cool_curve_band_3_offset
+        elif outdoor >= self.config.cool_curve_band_2_min:
+            band_offset = self.config.cool_curve_band_2_offset
+        elif outdoor >= self.config.cool_curve_band_1_min:
+            band_offset = self.config.cool_curve_band_1_offset
+        else:
+            band_offset = 0.0
+        weighted = round(band_offset * curve_weight_for_profile(self.config, profile, cooling=True), 1)
+        _LOGGER.debug(
+            "Outdoor temp %s selected cool curve offset %s weighted to %s for profile %s",
+            outdoor,
+            band_offset,
+            weighted,
+            profile,
+        )
+        return weighted
+    def _resolve_active_comfort_offset(
+        self,
+        desired_mode: str | None,
+        heat_offset: float,
+        cool_offset: float,
+    ) -> float:
+        if desired_mode == HVAC_PREF_HEAT:
+            return heat_offset
+        if desired_mode == HVAC_PREF_COOL:
+            return cool_offset
+        if desired_mode == "heat_cool":
+            return cool_offset if abs(cool_offset) > abs(heat_offset) else heat_offset
+        return 0.0
     @property
     def current_set_temperature(self) -> float | None:
-        """Return the thermostat current primary set temperature."""
+        """Return the active managed set temperature shown to the user."""
+        desired_mode = self.runtime.desired_hvac_mode
+        if desired_mode == HVAC_PREF_HEAT and self.runtime.target_heat is not None:
+            return self.runtime.target_heat
+        if desired_mode == HVAC_PREF_COOL and self.runtime.target_cool is not None:
+            return self.runtime.target_cool
+        if desired_mode == "heat_cool":
+            if self.runtime.target_heat is not None:
+                return self.runtime.target_heat
+            if self.runtime.target_cool is not None:
+                return self.runtime.target_cool
         thermostat = self._thermostat_snapshot()
         if not thermostat.available:
             return None
@@ -398,12 +445,19 @@ class ClimateManager:
         spread = target_temp_high - target_temp_low
         if spread >= MIN_HEAT_COOL_SPREAD:
             return target_temp_low, target_temp_high
-        midpoint = (target_temp_low + target_temp_high) / 2
-        half_spread = MIN_HEAT_COOL_SPREAD / 2
-        normalized_low = round((midpoint - half_spread) * 2) / 2
-        normalized_high = round((midpoint + half_spread) * 2) / 2
-        if normalized_high - normalized_low < MIN_HEAT_COOL_SPREAD:
-            normalized_high = normalized_low + MIN_HEAT_COOL_SPREAD
+        # Anchor the side that matches the current comfort adjustment direction.
+        # Positive offsets should not lower the requested heat target.
+        # Negative offsets should not raise the requested cool target.
+        if self.runtime.comfort_offset < 0:
+            normalized_high = target_temp_high
+            normalized_low = target_temp_high - MIN_HEAT_COOL_SPREAD
+            if normalized_low > target_temp_low:
+                normalized_low = target_temp_low
+        else:
+            normalized_low = target_temp_low
+            normalized_high = target_temp_low + MIN_HEAT_COOL_SPREAD
+            if normalized_high < target_temp_high:
+                normalized_high = target_temp_high
         return normalized_low, normalized_high
     def is_equivalent_heat_cool_range(
         self,

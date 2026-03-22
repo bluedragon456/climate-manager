@@ -37,6 +37,18 @@ class ManagerConfig:
     curve_weight_sleep: float = 0.5
     curve_weight_guest: float = 1.0
     curve_weight_away: float = 0.0
+    cool_curve_band_1_min: float = 65.0
+    cool_curve_band_1_offset: float = 0.0
+    cool_curve_band_2_min: float = 75.0
+    cool_curve_band_2_offset: float = 0.0
+    cool_curve_band_3_min: float = 85.0
+    cool_curve_band_3_offset: float = 0.0
+    cool_curve_band_4_min: float = 95.0
+    cool_curve_band_4_offset: float = 0.0
+    cool_curve_weight_home: float = 1.0
+    cool_curve_weight_sleep: float = 0.5
+    cool_curve_weight_guest: float = 1.0
+    cool_curve_weight_away: float = 0.0
     manual_temp_behavior: str = "temporary_override"
     manual_mode_behavior: str = "temporary_override"
     override_duration_minutes: int = 120
@@ -86,4 +98,3 @@ class ThermostatSnapshot:
     target_temp_high: float | None
     current_temperature: float | None
     available: bool
-
