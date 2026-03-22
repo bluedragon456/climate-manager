@@ -349,6 +349,11 @@ class ClimateManager:
         thermostat = self._thermostat_snapshot()
         if not thermostat.available:
             return None
+        if thermostat.hvac_mode == "heat_cool":
+            if thermostat.target_temp_low is not None:
+                return thermostat.target_temp_low
+            if thermostat.target_temp_high is not None:
+                return thermostat.target_temp_high
         if thermostat.target_temp is not None:
             return thermostat.target_temp
         if thermostat.target_temp_low is not None:
@@ -375,9 +380,11 @@ class ClimateManager:
             available=True,
         )
     def _manual_detection_snapshot(self, thermostat: ThermostatSnapshot) -> dict[str, float | str | None]:
+        # Some thermostats keep a stale primary "temperature" attribute while in heat_cool.
+        # Ignore it there and compare only the active low/high range.
         return {
             "hvac_mode": thermostat.hvac_mode,
-            "temperature": thermostat.target_temp,
+            "temperature": None if thermostat.hvac_mode == "heat_cool" else thermostat.target_temp,
             "target_temp_low": thermostat.target_temp_low,
             "target_temp_high": thermostat.target_temp_high,
         }
