@@ -707,24 +707,6 @@ class ClimateManager:
                 outcome="ignored:self_echo",
             )
             return
-        if in_grace_window:
-            self._log_manual_detection_event(
-                reason=reason,
-                thermostat_snapshot=thermostat_snapshot,
-                commanded_snapshot=commanded_snapshot,
-                command_time=command_time,
-                grace_until=grace_window,
-                settle_until=settle_window,
-                in_grace_window=in_grace_window,
-                in_settle_window=in_settle_window,
-                mode_changed=mode_changed,
-                temp_changed=temp_changed,
-                override_activated=False,
-                field_changes=field_changes,
-                heat_cool_equivalent=heat_cool_equivalent,
-                outcome="ignored:grace_window",
-            )
-            return
         if not mode_changed and not temp_changed:
             self._log_manual_detection_event(
                 reason=reason,
