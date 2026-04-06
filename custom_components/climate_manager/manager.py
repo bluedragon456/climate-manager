@@ -23,6 +23,11 @@ from .const import (
     PROFILE_PAUSED,
     PROFILE_SENSORS_OPEN,
     PROFILE_SLEEP,
+    SEASON_AUTUMN,
+    SEASON_FALL,
+    SEASON_SPRING,
+    SEASON_SUMMER,
+    SEASON_WINTER,
     STATUS_CONTROLLING,
     STATUS_IDLE,
     STATUS_MANUAL_OVERRIDE,
@@ -41,6 +46,14 @@ from .restore import RuntimeStore
 _LOGGER = logging.getLogger(__name__)
 _UNSET = object()
 MIN_HEAT_COOL_SPREAD = 5.0
+SEASONAL_BASELINES: dict[str, tuple[float, float]] = {
+    SEASON_WINTER: (69.0, 74.0),
+    SEASON_SPRING: (66.0, 71.0),
+    SEASON_SUMMER: (66.0, 71.0),
+    SEASON_FALL: (67.0, 72.0),
+    SEASON_AUTUMN: (67.0, 72.0),
+}
+NEUTRAL_HOME_BASELINE = (69.0, 73.0)
 class ClimateManager:
     """Main runtime manager."""
     def __init__(self, hass: HomeAssistant, entry_id: str, config: ManagerConfig) -> None:
@@ -270,10 +283,10 @@ class ClimateManager:
         preference = self.config.hvac_preference
         if preference in {HVAC_PREF_HEAT, HVAC_PREF_COOL, HVAC_PREF_OFF}:
             return preference
-        season = (state_text(self.hass, self.config.season_entity) or "").lower()
-        if season == "winter":
+        season = self._current_season()
+        if season == SEASON_WINTER:
             return HVAC_PREF_HEAT
-        if season == "summer":
+        if season == SEASON_SUMMER:
             return HVAC_PREF_COOL
         return "heat_cool"
     def _resolve_targets(self, profile: str, desired_mode: str | None) -> tuple[float | None, float | None]:
@@ -298,6 +311,7 @@ class ClimateManager:
             else:
                 base_heat = self.config.heat_home
                 base_cool = self.config.cool_home
+            base_heat, base_cool = self._apply_seasonal_baseline(profile, base_heat, base_cool)
         heat_offset = self._resolve_heat_curve_offset(profile)
         cool_offset = self._resolve_cool_curve_offset(profile)
         if desired_mode in {HVAC_PREF_HEAT, "heat_cool"} and base_heat is not None:
@@ -318,9 +332,35 @@ class ClimateManager:
             return base_heat, base_cool
         return None, None
     def _should_use_freeze_protection(self) -> bool:
-        season = (state_text(self.hass, self.config.season_entity) or "").lower()
+        season = self._current_season()
         outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
-        return season == "winter" and outdoor is not None and outdoor <= WINDOWS_FREEZE_PROTECTION_OUTDOOR_TEMP
+        return season == SEASON_WINTER and outdoor is not None and outdoor <= WINDOWS_FREEZE_PROTECTION_OUTDOOR_TEMP
+    def _current_season(self) -> str:
+        season = (state_text(self.hass, self.config.season_entity) or "").strip().lower()
+        if season == SEASON_AUTUMN:
+            return SEASON_FALL
+        return season
+    def _seasonal_baseline_delta(self) -> tuple[float, float]:
+        baseline = SEASONAL_BASELINES.get(self._current_season())
+        if baseline is None:
+            return 0.0, 0.0
+        neutral_heat, neutral_cool = NEUTRAL_HOME_BASELINE
+        baseline_heat, baseline_cool = baseline
+        return baseline_heat - neutral_heat, baseline_cool - neutral_cool
+    def _apply_seasonal_baseline(
+        self,
+        profile: str,
+        base_heat: float | None,
+        base_cool: float | None,
+    ) -> tuple[float | None, float | None]:
+        if profile not in {PROFILE_HOME, PROFILE_SLEEP, PROFILE_GUEST, PROFILE_AWAY}:
+            return base_heat, base_cool
+        heat_delta, cool_delta = self._seasonal_baseline_delta()
+        if base_heat is not None:
+            base_heat += heat_delta
+        if base_cool is not None:
+            base_cool += cool_delta
+        return base_heat, base_cool
     def _resolve_heat_curve_offset(self, profile: str) -> float:
         outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
         if outdoor is None:

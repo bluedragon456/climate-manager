@@ -10,7 +10,8 @@ Climate Manager currently:
 
 - Controls an existing thermostat entity
 - Supports `home`, `sleep`, `guest`, `away`, `manual override`, `override lock`, `windows open`, and `paused` states
-- Applies a heating comfort offset based on outdoor temperature
+- Applies heating and cooling comfort offsets based on outdoor temperature
+- Applies season-aware baseline shifts for `winter`, `spring`, `summer`, and `fall`
 - Detects manual thermostat setpoint and HVAC mode changes
 - Can ignore manual changes, treat them as a temporary override, or hold them until cleared
 - Exposes status sensors, control buttons, a master enable switch, and services
@@ -117,7 +118,8 @@ The options flow lets you tune:
 - Home, sleep, guest, and away cool targets
 - HVAC preference: `Auto`, `Heat`, `Cool`, or `Off`
 - Four outdoor-temperature heating curve bands and offsets
-- Per-profile curve weights
+- Four outdoor-temperature cooling curve bands and offsets
+- Per-profile heat and cool curve weights
 - Manual temperature change behavior
 - Manual HVAC mode change behavior
 - Temporary override duration
@@ -150,8 +152,81 @@ Climate Manager resolves the active profile in this order:
 - If HVAC preference is `Auto`, the season entity is used when available:
   - `winter` -> `heat`
   - `summer` -> `cool`
+  - `spring`, `fall`, and `autumn` -> `heat_cool`
   - anything else -> `heat_cool`
 - During manual override, override lock, or paused mode, Climate Manager stops applying changes.
+
+## Seasonal Baselines
+
+When a season entity is configured, Climate Manager shifts the configured profile targets before applying the outdoor curve. This keeps profile differences intact while nudging the whole house slightly warmer or cooler through the year.
+
+The seasonal home-equivalent baselines are:
+
+- `winter`: `69 / 74`
+- `spring`: `66 / 71`
+- `summer`: `66 / 71`
+- `fall` and `autumn`: `67 / 72`
+
+These seasonal baselines are applied as offsets relative to the neutral home baseline of `69 / 73`, then the usual profile targets, min/max clamps, and outdoor curve weights still apply.
+
+## Outdoor Temperature Response
+
+Climate Manager resolves a base target from the active profile, then applies an outdoor-temperature offset for the active mode:
+
+- Heating uses the configured heat curve bands and heat curve weights.
+- Cooling uses the configured cool curve bands and cool curve weights.
+- The final target is clamped to your configured min and max target limits.
+
+### Default Neutral Targets
+
+- `Home`: `73 F`
+- `Sleep`: `72 F`
+- `Guest`: `73 F`
+- `Away`: `78 F`
+
+### Default Heat Curve Behavior
+
+The default heat curve provides a positive comfort bump below `65 F`, then tapers down to neutral through `75 F`:
+
+| Outdoor temperature | Default heat offset | Effect on heat target |
+| --- | --- | --- |
+| `< 50 F` | `+3.0 F` | Raise the profile heat target by `3.0 F` |
+| `50-54.9 F` | `+2.0 F` | Raise the profile heat target by `2.0 F` |
+| `55-64.9 F` | `+1.0 F` | Raise the profile heat target by `1.0 F` |
+| `65-75 F` | `0.0 F` | Keep the profile heat target unchanged |
+| `> 75 F` | `0.0 F` | Keep the profile heat target unchanged |
+
+### Default Cooling Curve Behavior
+
+The integration includes four outdoor-temperature cooling bands:
+
+- `65 F` to `75 F`
+- `75.1 F` to `84.9 F`
+- `85 F` to `94.9 F`
+- `95 F` and above
+
+| Outdoor temperature | Default cool offset | Effect on cool target |
+| --- | --- | --- |
+| `<= 75 F` | `0.0 F` | Keep the profile cool target unchanged |
+| `75.1-84.9 F` | `-1.0 F` | Lower the profile cool target by `1.0 F` |
+| `85-94.9 F` | `-2.0 F` | Lower the profile cool target by `2.0 F` |
+| `>= 95 F` | `-3.0 F` | Lower the profile cool target by `3.0 F` |
+
+The default cool curve weights are:
+
+- `Home`: `1.0`
+- `Sleep`: `0.5`
+- `Guest`: `1.0`
+- `Away`: `0.0`
+
+The default heat curve weights use the same profile multipliers:
+
+- `Home`: `1.0`
+- `Sleep`: `0.5`
+- `Guest`: `1.0`
+- `Away`: `0.0`
+
+These weights scale the matching band offset before it is added to the profile target.
 
 ## Manual Change Handling
 
@@ -230,9 +305,10 @@ data:
 ## Notes and Limitations
 
 - Climate Manager controls your existing thermostat; it does not create a replacement `climate` entity.
-- The outdoor temperature curve currently affects heating targets only.
-- Cooling targets are profile-based and clamped by your configured min and max values.
-- Auto mode works best when the season entity reports values like `winter` or `summer`.
+- Outdoor temperature can affect both heating and cooling targets.
+- Seasonal baselines currently recognize `winter`, `spring`, `summer`, `fall`, and `autumn`.
+- Cooling targets are clamped by your configured min and max values.
+- Auto mode works best when the season entity reports values like `winter`, `spring`, `summer`, or `fall`.
 - If the thermostat is unavailable, Climate Manager stops applying changes and exposes that through `Fail-safe active` and `Status`.
 
 ## Troubleshooting
@@ -247,6 +323,17 @@ Check:
 - Override lock is not active
 - Windows backoff is not active
 - The thermostat supports the requested HVAC mode and temperature fields
+
+### Cooling Is Not Responding To Hotter Outdoor Temperatures
+
+Check:
+
+- `Desired HVAC mode` is actually `Cool` or `Auto` with the season entity reporting `summer`
+- `Target cool`, `Current set temp`, and `Comfort offset`
+- Your configured cool curve band offsets in the integration options
+- Your outdoor temperature sensor reading against a local weather source for the same time period
+
+If `Comfort offset` stays at `0.0`, Climate Manager is in the neutral zone for the current mode or profile. With the repo defaults, that is expected whenever outdoor temperature stays between `65 F` and `75 F`.
 
 ### It Keeps Entering Manual Override
 
@@ -286,4 +373,4 @@ logger:
 
 ### Auto Mode Picks the Wrong HVAC Mode
 
-If HVAC preference is `Auto`, check the season entity state. `winter` maps to `heat`, `summer` maps to `cool`, and any other value falls back to `heat_cool`.
+If HVAC preference is `Auto`, check the season entity state. `winter` maps to `heat`, `summer` maps to `cool`, and `spring`, `fall`, `autumn`, or any other value falls back to `heat_cool`.
