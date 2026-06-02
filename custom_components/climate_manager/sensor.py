@@ -24,12 +24,6 @@ class ClimateManagerSensorDescription(SensorEntityDescription):
     temperature_kind: str | None = None
 
 
-def _temperature_or_zero(value: float | None) -> float:
-    if value is None:
-        return 0.0
-    return value
-
-
 def _humanize_token(value: str) -> str:
     return value.replace("_", " ").replace(":", " ").strip().title()
 
@@ -90,7 +84,7 @@ SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
         temperature_kind="absolute",
-        value_fn=lambda manager: _temperature_or_zero(manager.current_set_temperature),
+        value_fn=lambda manager: manager.current_set_temperature,
     ),
     ClimateManagerSensorDescription(
         key="target_heat",
@@ -98,7 +92,7 @@ SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
         temperature_kind="absolute",
-        value_fn=lambda manager: _temperature_or_zero(manager.runtime.target_heat),
+        value_fn=lambda manager: manager.runtime.target_heat,
     ),
     ClimateManagerSensorDescription(
         key="target_cool",
@@ -106,7 +100,7 @@ SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
         temperature_kind="absolute",
-        value_fn=lambda manager: _temperature_or_zero(manager.runtime.target_cool),
+        value_fn=lambda manager: manager.runtime.target_cool,
     ),
     ClimateManagerSensorDescription(
         key="comfort_offset",
