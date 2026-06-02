@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Final
 
+from homeassistant.const import UnitOfTemperature
+
 DOMAIN: Final = "climate_manager"
 PLATFORMS: Final = ["sensor", "binary_sensor", "button", "switch"]
 
@@ -76,6 +78,7 @@ CONF_GUEST_ENTITY = "guest_entity"
 CONF_OVERRIDE_ENTITY = "override_entity"
 CONF_WINDOWS_ENTITY = "windows_entity"
 CONF_SEASON_ENTITY = "season_entity"
+CONF_TEMPERATURE_UNIT = "temperature_unit"
 CONF_SMART_CONTROL_ENABLED = "smart_control_enabled"
 CONF_HVAC_PREFERENCE = "hvac_preference"
 CONF_HEAT_HOME = "heat_home"
@@ -172,6 +175,11 @@ DEFAULT_WINDOWS_RESTORE_DELAY_MINUTES = 15
 DEFAULT_WINDOWS_ACTION = WINDOWS_ACTION_OFF
 DEFAULT_SMART_CONTROL_ENABLED = True
 DEFAULT_HVAC_PREFERENCE = HVAC_PREF_AUTO
+# Internal control logic always runs in Fahrenheit; this only selects the unit
+# shown in the UI and used at the Home Assistant I/O boundary. Lives in
+# entry.data (set during initial setup), so it is intentionally NOT in
+# DEFAULT_OPTIONS.
+DEFAULT_TEMPERATURE_UNIT = UnitOfTemperature.FAHRENHEIT
 WINDOWS_FREEZE_PROTECTION_OUTDOOR_TEMP = 50.0
 WINDOWS_FREEZE_PROTECTION_HEAT_TARGET = 50.0
 DEFAULT_MIN_HEAT_TARGET = 60.0

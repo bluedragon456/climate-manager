@@ -37,6 +37,10 @@ Core integration files:
 - `custom_components/climate_manager/strings.json` and `translations/`: UI strings and localization
 - `custom_components/climate_manager/manifest.json`: Home Assistant manifest metadata
 
+## Temperature Unit Invariant
+
+`manager.py` always computes in Fahrenheit. The `temperature_unit` setting (chosen at setup, stored in `entry.data`, default Fahrenheit) only drives conversion at the Home Assistant I/O boundary through the helpers in `helpers.py` (`from_ha_temp`/`to_ha_temp` for absolute temperatures, `*_delta` for offsets/spans). Conversion is isolated to: `_thermostat_snapshot` and `_outdoor_temp_f` (inputs C→F), `_async_set_temperature` and `async_set_temporary_override` payloads (outputs F→C), the `set_temporary_override` service handler in `__init__.py` (input C→F), the temperature sensors in `sensor.py`, and the options form in `config_flow.py` (display/save, storage stays Fahrenheit). Do not add unit conversion inside the manager's decision logic, curve math, baselines, or clamps.
+
 ## Working Rules
 
 When making changes in this repository:

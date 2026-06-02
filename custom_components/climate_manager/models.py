@@ -15,6 +15,10 @@ class ManagerConfig:
     override_entity: str | None = None
     windows_entity: str | None = None
     season_entity: str | None = None
+    # Unit shown in the UI and used at the Home Assistant I/O boundary.
+    # Internal logic is always Fahrenheit. Default keeps existing entries
+    # (which have no stored unit) behaving exactly as before.
+    temperature_unit: str = "°F"
     smart_control_enabled: bool = True
     hvac_preference: str = "auto"
     heat_home: float = 69.0

@@ -89,6 +89,7 @@ Climate Manager is configured through the UI only. There is no YAML setup.
 
 - `Thermostat`: a `climate` entity
 - `Outdoor temperature sensor`: a `sensor` entity
+- `Temperature unit`: `Fahrenheit` or `Celsius` (defaults to Fahrenheit)
 
 ### Optional During Setup
 
@@ -109,6 +110,19 @@ Climate Manager is configured through the UI only. There is no YAML setup.
 - `input_boolean.climate_override_lock`
 - `binary_sensor.window_open`
 - `input_text.season_mode`
+
+## Temperature Units
+
+The temperature unit is chosen during initial setup and defaults to `Fahrenheit`. Select `Celsius` if your Home Assistant thermostat and outdoor temperature sensor report in Celsius.
+
+When `Celsius` is selected:
+
+- The options dialog shows and accepts all targets, curve band thresholds, min/max limits, offsets, and the change threshold in Celsius.
+- Status sensors (`Current set temp`, `Target heat`, `Target cool`, `Comfort offset`) report in Celsius. `Comfort offset` is a difference, so it converts by scale only.
+- The integration reads the outdoor sensor and thermostat in Celsius and commands the thermostat in Celsius.
+- The `set_temporary_override` service `target_temp` is interpreted in Celsius.
+
+Internally the control logic always computes in Fahrenheit; the unit setting only governs how values are displayed and exchanged with Home Assistant. The unit is set once at setup and is not changeable from the options dialog. Existing installations have no stored unit and continue to operate in Fahrenheit with no change.
 
 ## Options
 

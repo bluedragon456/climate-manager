@@ -10,8 +10,10 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
+    CONF_TEMPERATURE_UNIT,
     DATA_MANAGER,
     DEFAULT_OPTIONS,
+    DEFAULT_TEMPERATURE_UNIT,
     DOMAIN,
     PLATFORMS,
     SERVICE_CLEAR_OVERRIDE,
@@ -20,6 +22,7 @@ from .const import (
     SERVICE_RESUME,
     SERVICE_SET_TEMPORARY_OVERRIDE,
 )
+from .helpers import from_ha_temp
 from .manager import ClimateManager
 from .models import ManagerConfig
 
@@ -50,6 +53,7 @@ def _build_manager_config(entry: ConfigEntry) -> ManagerConfig:
         override_entity=raw.get("override_entity"),
         windows_entity=raw.get("windows_entity"),
         season_entity=raw.get("season_entity"),
+        temperature_unit=raw.get(CONF_TEMPERATURE_UNIT, DEFAULT_TEMPERATURE_UNIT),
         smart_control_enabled=raw["smart_control_enabled"],
         hvac_preference=raw["hvac_preference"],
         heat_home=raw["heat_home"],
@@ -150,9 +154,12 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 
     async def handle_set_temporary_override(call: ServiceCall) -> None:
         if manager := await _get_manager(call):
+            # target_temp is provided in the configured unit; convert to the
+            # internal Fahrenheit the manager works in.
+            target_temp = from_ha_temp(call.data.get("target_temp"), manager.config.temperature_unit)
             await manager.async_set_temporary_override(
                 duration_minutes=call.data["duration_minutes"],
-                target_temp=call.data.get("target_temp"),
+                target_temp=target_temp,
                 hvac_mode=call.data.get("hvac_mode"),
             )
 

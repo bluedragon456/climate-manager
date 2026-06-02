@@ -5,12 +5,32 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import *  # noqa: F403,F401
+from .helpers import c_to_f_abs, c_to_f_delta, f_to_c_abs, f_to_c_delta, is_celsius
 
 HVAC_PREFERENCE_OPTIONS = [HVAC_PREF_AUTO, HVAC_PREF_HEAT, HVAC_PREF_COOL, HVAC_PREF_OFF]
+TEMPERATURE_UNIT_OPTIONS = [UnitOfTemperature.FAHRENHEIT, UnitOfTemperature.CELSIUS]
+
+# Option keys whose stored value is an absolute Fahrenheit temperature. When the
+# user picks Celsius, these are shown in C (and converted back to F on save).
+ABSOLUTE_TEMP_OPTION_KEYS = (
+    CONF_HEAT_HOME, CONF_HEAT_SLEEP, CONF_HEAT_GUEST, CONF_HEAT_AWAY,
+    CONF_COOL_HOME, CONF_COOL_SLEEP, CONF_COOL_GUEST, CONF_COOL_AWAY,
+    CONF_CURVE_BAND_1_MAX, CONF_CURVE_BAND_2_MAX, CONF_CURVE_BAND_3_MAX, CONF_CURVE_BAND_4_MAX,
+    CONF_COOL_CURVE_BAND_1_MIN, CONF_COOL_CURVE_BAND_2_MIN, CONF_COOL_CURVE_BAND_3_MIN, CONF_COOL_CURVE_BAND_4_MIN,
+    CONF_MIN_HEAT_TARGET, CONF_MAX_HEAT_TARGET, CONF_MIN_COOL_TARGET, CONF_MAX_COOL_TARGET,
+)
+
+# Option keys whose stored value is a Fahrenheit delta/span (convert by scale only).
+DELTA_TEMP_OPTION_KEYS = (
+    CONF_CURVE_BAND_1_OFFSET, CONF_CURVE_BAND_2_OFFSET, CONF_CURVE_BAND_3_OFFSET, CONF_CURVE_BAND_4_OFFSET,
+    CONF_COOL_CURVE_BAND_1_OFFSET, CONF_COOL_CURVE_BAND_2_OFFSET, CONF_COOL_CURVE_BAND_3_OFFSET, CONF_COOL_CURVE_BAND_4_OFFSET,
+    CONF_TEMP_CHANGE_THRESHOLD,
+)
 MANUAL_BEHAVIOR_OPTIONS = [
     MANUAL_BEHAVIOR_IGNORE,
     MANUAL_BEHAVIOR_TEMPORARY,
@@ -104,8 +124,48 @@ def _int_box(default: int, *, min_value: int, max_value: int):
     )
 
 
-def _build_options_schema(defaults: dict[str, Any]) -> vol.Schema:
-    defaults = _normalize_options(defaults)
+def _abs_box(value: float, *, min_f: float, max_f: float, step: float, unit: str):
+    """Number box for an absolute temperature, with unit-aware min/max."""
+    if is_celsius(unit):
+        return _float_box(value, min_value=round(f_to_c_abs(min_f), 1), max_value=round(f_to_c_abs(max_f), 1), step=step)
+    return _float_box(value, min_value=min_f, max_value=max_f, step=step)
+
+
+def _delta_box(value: float, *, min_f: float, max_f: float, step: float, unit: str):
+    """Number box for a temperature delta/span, with unit-aware min/max (scale only)."""
+    if is_celsius(unit):
+        return _float_box(value, min_value=round(f_to_c_delta(min_f), 1), max_value=round(f_to_c_delta(max_f), 1), step=step)
+    return _float_box(value, min_value=min_f, max_value=max_f, step=step)
+
+
+def _options_to_display(options: dict[str, Any], unit: str) -> dict[str, Any]:
+    """Convert stored (Fahrenheit) option values into the unit shown to the user."""
+    if not is_celsius(unit):
+        return options
+    display = dict(options)
+    for key in ABSOLUTE_TEMP_OPTION_KEYS:
+        display[key] = round(f_to_c_abs(options[key]), 1)
+    for key in DELTA_TEMP_OPTION_KEYS:
+        display[key] = round(f_to_c_delta(options[key]), 1)
+    return display
+
+
+def _options_to_storage(user_input: dict[str, Any], unit: str) -> dict[str, Any]:
+    """Convert submitted option values (in the user's unit) into stored Fahrenheit."""
+    if not is_celsius(unit):
+        return _normalize_options(user_input)
+    converted = dict(user_input)
+    for key in ABSOLUTE_TEMP_OPTION_KEYS:
+        if key in converted:
+            converted[key] = c_to_f_abs(converted[key])
+    for key in DELTA_TEMP_OPTION_KEYS:
+        if key in converted:
+            converted[key] = c_to_f_delta(converted[key])
+    return _normalize_options(converted)
+
+
+def _build_options_schema(defaults: dict[str, Any], unit: str = DEFAULT_TEMPERATURE_UNIT) -> vol.Schema:
+    defaults = _options_to_display(_normalize_options(defaults), unit)
 
     return vol.Schema(
         {
@@ -113,34 +173,34 @@ def _build_options_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(CONF_HVAC_PREFERENCE, default=defaults[CONF_HVAC_PREFERENCE]): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=HVAC_PREFERENCE_OPTIONS, mode=selector.SelectSelectorMode.DROPDOWN)
             ),
-            vol.Required(CONF_HEAT_HOME, default=defaults[CONF_HEAT_HOME]): _float_box(defaults[CONF_HEAT_HOME], min_value=30, max_value=100),
-            vol.Required(CONF_HEAT_SLEEP, default=defaults[CONF_HEAT_SLEEP]): _float_box(defaults[CONF_HEAT_SLEEP], min_value=30, max_value=100),
-            vol.Required(CONF_HEAT_GUEST, default=defaults[CONF_HEAT_GUEST]): _float_box(defaults[CONF_HEAT_GUEST], min_value=30, max_value=100),
-            vol.Required(CONF_HEAT_AWAY, default=defaults[CONF_HEAT_AWAY]): _float_box(defaults[CONF_HEAT_AWAY], min_value=30, max_value=100),
-            vol.Required(CONF_COOL_HOME, default=defaults[CONF_COOL_HOME]): _float_box(defaults[CONF_COOL_HOME], min_value=30, max_value=100),
-            vol.Required(CONF_COOL_SLEEP, default=defaults[CONF_COOL_SLEEP]): _float_box(defaults[CONF_COOL_SLEEP], min_value=30, max_value=100),
-            vol.Required(CONF_COOL_GUEST, default=defaults[CONF_COOL_GUEST]): _float_box(defaults[CONF_COOL_GUEST], min_value=30, max_value=100),
-            vol.Required(CONF_COOL_AWAY, default=defaults[CONF_COOL_AWAY]): _float_box(defaults[CONF_COOL_AWAY], min_value=30, max_value=100),
-            vol.Required(CONF_CURVE_BAND_1_MAX, default=defaults[CONF_CURVE_BAND_1_MAX]): _float_box(defaults[CONF_CURVE_BAND_1_MAX], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_CURVE_BAND_1_OFFSET, default=defaults[CONF_CURVE_BAND_1_OFFSET]): _float_box(defaults[CONF_CURVE_BAND_1_OFFSET], min_value=-20, max_value=20),
-            vol.Required(CONF_CURVE_BAND_2_MAX, default=defaults[CONF_CURVE_BAND_2_MAX]): _float_box(defaults[CONF_CURVE_BAND_2_MAX], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_CURVE_BAND_2_OFFSET, default=defaults[CONF_CURVE_BAND_2_OFFSET]): _float_box(defaults[CONF_CURVE_BAND_2_OFFSET], min_value=-20, max_value=20),
-            vol.Required(CONF_CURVE_BAND_3_MAX, default=defaults[CONF_CURVE_BAND_3_MAX]): _float_box(defaults[CONF_CURVE_BAND_3_MAX], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_CURVE_BAND_3_OFFSET, default=defaults[CONF_CURVE_BAND_3_OFFSET]): _float_box(defaults[CONF_CURVE_BAND_3_OFFSET], min_value=-20, max_value=20),
-            vol.Required(CONF_CURVE_BAND_4_MAX, default=defaults[CONF_CURVE_BAND_4_MAX]): _float_box(defaults[CONF_CURVE_BAND_4_MAX], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_CURVE_BAND_4_OFFSET, default=defaults[CONF_CURVE_BAND_4_OFFSET]): _float_box(defaults[CONF_CURVE_BAND_4_OFFSET], min_value=-20, max_value=20),
+            vol.Required(CONF_HEAT_HOME, default=defaults[CONF_HEAT_HOME]): _abs_box(defaults[CONF_HEAT_HOME], min_f=30, max_f=100, step=0.5, unit=unit),
+            vol.Required(CONF_HEAT_SLEEP, default=defaults[CONF_HEAT_SLEEP]): _abs_box(defaults[CONF_HEAT_SLEEP], min_f=30, max_f=100, step=0.5, unit=unit),
+            vol.Required(CONF_HEAT_GUEST, default=defaults[CONF_HEAT_GUEST]): _abs_box(defaults[CONF_HEAT_GUEST], min_f=30, max_f=100, step=0.5, unit=unit),
+            vol.Required(CONF_HEAT_AWAY, default=defaults[CONF_HEAT_AWAY]): _abs_box(defaults[CONF_HEAT_AWAY], min_f=30, max_f=100, step=0.5, unit=unit),
+            vol.Required(CONF_COOL_HOME, default=defaults[CONF_COOL_HOME]): _abs_box(defaults[CONF_COOL_HOME], min_f=30, max_f=100, step=0.5, unit=unit),
+            vol.Required(CONF_COOL_SLEEP, default=defaults[CONF_COOL_SLEEP]): _abs_box(defaults[CONF_COOL_SLEEP], min_f=30, max_f=100, step=0.5, unit=unit),
+            vol.Required(CONF_COOL_GUEST, default=defaults[CONF_COOL_GUEST]): _abs_box(defaults[CONF_COOL_GUEST], min_f=30, max_f=100, step=0.5, unit=unit),
+            vol.Required(CONF_COOL_AWAY, default=defaults[CONF_COOL_AWAY]): _abs_box(defaults[CONF_COOL_AWAY], min_f=30, max_f=100, step=0.5, unit=unit),
+            vol.Required(CONF_CURVE_BAND_1_MAX, default=defaults[CONF_CURVE_BAND_1_MAX]): _abs_box(defaults[CONF_CURVE_BAND_1_MAX], min_f=-50, max_f=150, step=0.1, unit=unit),
+            vol.Required(CONF_CURVE_BAND_1_OFFSET, default=defaults[CONF_CURVE_BAND_1_OFFSET]): _delta_box(defaults[CONF_CURVE_BAND_1_OFFSET], min_f=-20, max_f=20, step=0.5, unit=unit),
+            vol.Required(CONF_CURVE_BAND_2_MAX, default=defaults[CONF_CURVE_BAND_2_MAX]): _abs_box(defaults[CONF_CURVE_BAND_2_MAX], min_f=-50, max_f=150, step=0.1, unit=unit),
+            vol.Required(CONF_CURVE_BAND_2_OFFSET, default=defaults[CONF_CURVE_BAND_2_OFFSET]): _delta_box(defaults[CONF_CURVE_BAND_2_OFFSET], min_f=-20, max_f=20, step=0.5, unit=unit),
+            vol.Required(CONF_CURVE_BAND_3_MAX, default=defaults[CONF_CURVE_BAND_3_MAX]): _abs_box(defaults[CONF_CURVE_BAND_3_MAX], min_f=-50, max_f=150, step=0.1, unit=unit),
+            vol.Required(CONF_CURVE_BAND_3_OFFSET, default=defaults[CONF_CURVE_BAND_3_OFFSET]): _delta_box(defaults[CONF_CURVE_BAND_3_OFFSET], min_f=-20, max_f=20, step=0.5, unit=unit),
+            vol.Required(CONF_CURVE_BAND_4_MAX, default=defaults[CONF_CURVE_BAND_4_MAX]): _abs_box(defaults[CONF_CURVE_BAND_4_MAX], min_f=-50, max_f=150, step=0.1, unit=unit),
+            vol.Required(CONF_CURVE_BAND_4_OFFSET, default=defaults[CONF_CURVE_BAND_4_OFFSET]): _delta_box(defaults[CONF_CURVE_BAND_4_OFFSET], min_f=-20, max_f=20, step=0.5, unit=unit),
             vol.Required(CONF_CURVE_WEIGHT_HOME, default=defaults[CONF_CURVE_WEIGHT_HOME]): _float_box(defaults[CONF_CURVE_WEIGHT_HOME], min_value=0, max_value=5, step=0.1),
             vol.Required(CONF_CURVE_WEIGHT_SLEEP, default=defaults[CONF_CURVE_WEIGHT_SLEEP]): _float_box(defaults[CONF_CURVE_WEIGHT_SLEEP], min_value=0, max_value=5, step=0.1),
             vol.Required(CONF_CURVE_WEIGHT_GUEST, default=defaults[CONF_CURVE_WEIGHT_GUEST]): _float_box(defaults[CONF_CURVE_WEIGHT_GUEST], min_value=0, max_value=5, step=0.1),
             vol.Required(CONF_CURVE_WEIGHT_AWAY, default=defaults[CONF_CURVE_WEIGHT_AWAY]): _float_box(defaults[CONF_CURVE_WEIGHT_AWAY], min_value=0, max_value=5, step=0.1),
-            vol.Required(CONF_COOL_CURVE_BAND_1_MIN, default=defaults[CONF_COOL_CURVE_BAND_1_MIN]): _float_box(defaults[CONF_COOL_CURVE_BAND_1_MIN], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_COOL_CURVE_BAND_1_OFFSET, default=defaults[CONF_COOL_CURVE_BAND_1_OFFSET]): _float_box(defaults[CONF_COOL_CURVE_BAND_1_OFFSET], min_value=-20, max_value=20),
-            vol.Required(CONF_COOL_CURVE_BAND_2_MIN, default=defaults[CONF_COOL_CURVE_BAND_2_MIN]): _float_box(defaults[CONF_COOL_CURVE_BAND_2_MIN], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_COOL_CURVE_BAND_2_OFFSET, default=defaults[CONF_COOL_CURVE_BAND_2_OFFSET]): _float_box(defaults[CONF_COOL_CURVE_BAND_2_OFFSET], min_value=-20, max_value=20),
-            vol.Required(CONF_COOL_CURVE_BAND_3_MIN, default=defaults[CONF_COOL_CURVE_BAND_3_MIN]): _float_box(defaults[CONF_COOL_CURVE_BAND_3_MIN], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_COOL_CURVE_BAND_3_OFFSET, default=defaults[CONF_COOL_CURVE_BAND_3_OFFSET]): _float_box(defaults[CONF_COOL_CURVE_BAND_3_OFFSET], min_value=-20, max_value=20),
-            vol.Required(CONF_COOL_CURVE_BAND_4_MIN, default=defaults[CONF_COOL_CURVE_BAND_4_MIN]): _float_box(defaults[CONF_COOL_CURVE_BAND_4_MIN], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_COOL_CURVE_BAND_4_OFFSET, default=defaults[CONF_COOL_CURVE_BAND_4_OFFSET]): _float_box(defaults[CONF_COOL_CURVE_BAND_4_OFFSET], min_value=-20, max_value=20),
+            vol.Required(CONF_COOL_CURVE_BAND_1_MIN, default=defaults[CONF_COOL_CURVE_BAND_1_MIN]): _abs_box(defaults[CONF_COOL_CURVE_BAND_1_MIN], min_f=-50, max_f=150, step=0.1, unit=unit),
+            vol.Required(CONF_COOL_CURVE_BAND_1_OFFSET, default=defaults[CONF_COOL_CURVE_BAND_1_OFFSET]): _delta_box(defaults[CONF_COOL_CURVE_BAND_1_OFFSET], min_f=-20, max_f=20, step=0.5, unit=unit),
+            vol.Required(CONF_COOL_CURVE_BAND_2_MIN, default=defaults[CONF_COOL_CURVE_BAND_2_MIN]): _abs_box(defaults[CONF_COOL_CURVE_BAND_2_MIN], min_f=-50, max_f=150, step=0.1, unit=unit),
+            vol.Required(CONF_COOL_CURVE_BAND_2_OFFSET, default=defaults[CONF_COOL_CURVE_BAND_2_OFFSET]): _delta_box(defaults[CONF_COOL_CURVE_BAND_2_OFFSET], min_f=-20, max_f=20, step=0.5, unit=unit),
+            vol.Required(CONF_COOL_CURVE_BAND_3_MIN, default=defaults[CONF_COOL_CURVE_BAND_3_MIN]): _abs_box(defaults[CONF_COOL_CURVE_BAND_3_MIN], min_f=-50, max_f=150, step=0.1, unit=unit),
+            vol.Required(CONF_COOL_CURVE_BAND_3_OFFSET, default=defaults[CONF_COOL_CURVE_BAND_3_OFFSET]): _delta_box(defaults[CONF_COOL_CURVE_BAND_3_OFFSET], min_f=-20, max_f=20, step=0.5, unit=unit),
+            vol.Required(CONF_COOL_CURVE_BAND_4_MIN, default=defaults[CONF_COOL_CURVE_BAND_4_MIN]): _abs_box(defaults[CONF_COOL_CURVE_BAND_4_MIN], min_f=-50, max_f=150, step=0.1, unit=unit),
+            vol.Required(CONF_COOL_CURVE_BAND_4_OFFSET, default=defaults[CONF_COOL_CURVE_BAND_4_OFFSET]): _delta_box(defaults[CONF_COOL_CURVE_BAND_4_OFFSET], min_f=-20, max_f=20, step=0.5, unit=unit),
             vol.Required(CONF_COOL_CURVE_WEIGHT_HOME, default=defaults[CONF_COOL_CURVE_WEIGHT_HOME]): _float_box(defaults[CONF_COOL_CURVE_WEIGHT_HOME], min_value=0, max_value=5, step=0.1),
             vol.Required(CONF_COOL_CURVE_WEIGHT_SLEEP, default=defaults[CONF_COOL_CURVE_WEIGHT_SLEEP]): _float_box(defaults[CONF_COOL_CURVE_WEIGHT_SLEEP], min_value=0, max_value=5, step=0.1),
             vol.Required(CONF_COOL_CURVE_WEIGHT_GUEST, default=defaults[CONF_COOL_CURVE_WEIGHT_GUEST]): _float_box(defaults[CONF_COOL_CURVE_WEIGHT_GUEST], min_value=0, max_value=5, step=0.1),
@@ -158,11 +218,11 @@ def _build_options_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(CONF_WINDOWS_ACTION, default=defaults[CONF_WINDOWS_ACTION]): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=WINDOWS_ACTION_OPTIONS, mode=selector.SelectSelectorMode.DROPDOWN)
             ),
-            vol.Required(CONF_MIN_HEAT_TARGET, default=defaults[CONF_MIN_HEAT_TARGET]): _float_box(defaults[CONF_MIN_HEAT_TARGET], min_value=30, max_value=100),
-            vol.Required(CONF_MAX_HEAT_TARGET, default=defaults[CONF_MAX_HEAT_TARGET]): _float_box(defaults[CONF_MAX_HEAT_TARGET], min_value=30, max_value=100),
-            vol.Required(CONF_MIN_COOL_TARGET, default=defaults[CONF_MIN_COOL_TARGET]): _float_box(defaults[CONF_MIN_COOL_TARGET], min_value=30, max_value=100),
-            vol.Required(CONF_MAX_COOL_TARGET, default=defaults[CONF_MAX_COOL_TARGET]): _float_box(defaults[CONF_MAX_COOL_TARGET], min_value=30, max_value=100),
-            vol.Required(CONF_TEMP_CHANGE_THRESHOLD, default=defaults[CONF_TEMP_CHANGE_THRESHOLD]): _float_box(defaults[CONF_TEMP_CHANGE_THRESHOLD], min_value=0, max_value=10, step=0.1),
+            vol.Required(CONF_MIN_HEAT_TARGET, default=defaults[CONF_MIN_HEAT_TARGET]): _abs_box(defaults[CONF_MIN_HEAT_TARGET], min_f=30, max_f=100, step=0.5, unit=unit),
+            vol.Required(CONF_MAX_HEAT_TARGET, default=defaults[CONF_MAX_HEAT_TARGET]): _abs_box(defaults[CONF_MAX_HEAT_TARGET], min_f=30, max_f=100, step=0.5, unit=unit),
+            vol.Required(CONF_MIN_COOL_TARGET, default=defaults[CONF_MIN_COOL_TARGET]): _abs_box(defaults[CONF_MIN_COOL_TARGET], min_f=30, max_f=100, step=0.5, unit=unit),
+            vol.Required(CONF_MAX_COOL_TARGET, default=defaults[CONF_MAX_COOL_TARGET]): _abs_box(defaults[CONF_MAX_COOL_TARGET], min_f=30, max_f=100, step=0.5, unit=unit),
+            vol.Required(CONF_TEMP_CHANGE_THRESHOLD, default=defaults[CONF_TEMP_CHANGE_THRESHOLD]): _delta_box(defaults[CONF_TEMP_CHANGE_THRESHOLD], min_f=0, max_f=10, step=0.1, unit=unit),
             vol.Required(CONF_CANCEL_OVERRIDE_ON_AWAY, default=defaults[CONF_CANCEL_OVERRIDE_ON_AWAY]): selector.BooleanSelector(),
             vol.Required(CONF_CANCEL_OVERRIDE_ON_WINDOWS, default=defaults[CONF_CANCEL_OVERRIDE_ON_WINDOWS]): selector.BooleanSelector(),
             vol.Required(CONF_CANCEL_OVERRIDE_ON_SLEEP, default=defaults[CONF_CANCEL_OVERRIDE_ON_SLEEP]): selector.BooleanSelector(),
@@ -215,6 +275,13 @@ class ClimateManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_SEASON_ENTITY): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain=["input_text", "sensor", "select"])
                 ),
+                vol.Required(CONF_TEMPERATURE_UNIT, default=DEFAULT_TEMPERATURE_UNIT): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=TEMPERATURE_UNIT_OPTIONS,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                        translation_key="temperature_unit",
+                    )
+                ),
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema)
@@ -228,8 +295,11 @@ class ClimateManagerOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         """Manage options."""
+        # The unit is chosen at initial setup and stored in entry.data; the options
+        # form displays/saves temperatures in that unit while storage stays Fahrenheit.
+        unit = self._config_entry.data.get(CONF_TEMPERATURE_UNIT, DEFAULT_TEMPERATURE_UNIT)
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            return self.async_create_entry(title="", data=_options_to_storage(user_input, unit))
 
         defaults = _normalize_options({**self._config_entry.data, **self._config_entry.options})
-        return self.async_show_form(step_id="init", data_schema=_build_options_schema(defaults))
+        return self.async_show_form(step_id="init", data_schema=_build_options_schema(defaults, unit))

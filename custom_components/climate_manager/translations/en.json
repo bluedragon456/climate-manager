@@ -13,7 +13,19 @@
           "guest_entity": "Guest mode boolean",
           "override_entity": "Manual climate lock boolean",
           "windows_entity": "Window or door open sensor",
-          "season_entity": "Season source"
+          "season_entity": "Season source",
+          "temperature_unit": "Temperature unit"
+        },
+        "data_description": {
+          "temperature_unit": "Unit used for all temperature inputs and outputs. Choose the unit your Home Assistant thermostat and outdoor sensor report. Internal logic always runs in Fahrenheit; this only affects what you see and enter."
+        }
+      }
+    },
+    "selector": {
+      "temperature_unit": {
+        "options": {
+          "°F": "Fahrenheit (°F)",
+          "°C": "Celsius (°C)"
         }
       }
     }

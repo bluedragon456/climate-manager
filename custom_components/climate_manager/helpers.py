@@ -4,6 +4,7 @@ from __future__ import annotations
 from math import isfinite
 from typing import Any
 
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
@@ -77,3 +78,73 @@ def curve_weight_for_profile(config: ManagerConfig, profile: str, *, cooling: bo
 def now() -> Any:
     """Timezone-aware now helper."""
     return dt_util.utcnow()
+
+
+# Temperature unit conversion
+#
+# Climate Manager's internal logic operates entirely in Fahrenheit. These helpers
+# convert at the Home Assistant I/O boundary when the user configures Celsius.
+# Absolute temperatures use the full F<->C formula; deltas/offsets/spans convert
+# by scale only (no +/-32). Values are passed through untouched for Fahrenheit so
+# existing installs see no behavior change.
+
+
+def is_celsius(unit: str | None) -> bool:
+    """Return True if the configured unit is Celsius."""
+    return unit == UnitOfTemperature.CELSIUS
+
+
+def f_to_c_abs(value: float | None) -> float | None:
+    """Convert an absolute Fahrenheit temperature to Celsius."""
+    if value is None:
+        return None
+    return (value - 32.0) * 5.0 / 9.0
+
+
+def c_to_f_abs(value: float | None) -> float | None:
+    """Convert an absolute Celsius temperature to Fahrenheit."""
+    if value is None:
+        return None
+    return value * 9.0 / 5.0 + 32.0
+
+
+def f_to_c_delta(value: float | None) -> float | None:
+    """Convert a Fahrenheit delta/span to Celsius (scale only)."""
+    if value is None:
+        return None
+    return value * 5.0 / 9.0
+
+
+def c_to_f_delta(value: float | None) -> float | None:
+    """Convert a Celsius delta/span to Fahrenheit (scale only)."""
+    if value is None:
+        return None
+    return value * 9.0 / 5.0
+
+
+def from_ha_temp(value: float | None, unit: str | None) -> float | None:
+    """Convert an absolute temperature read from Home Assistant to internal Fahrenheit."""
+    if is_celsius(unit):
+        return c_to_f_abs(value)
+    return value
+
+
+def to_ha_temp(value: float | None, unit: str | None) -> float | None:
+    """Convert an internal Fahrenheit temperature to the Home Assistant unit."""
+    if is_celsius(unit):
+        return f_to_c_abs(value)
+    return value
+
+
+def from_ha_temp_delta(value: float | None, unit: str | None) -> float | None:
+    """Convert a temperature delta read from Home Assistant to an internal Fahrenheit delta."""
+    if is_celsius(unit):
+        return c_to_f_delta(value)
+    return value
+
+
+def to_ha_temp_delta(value: float | None, unit: str | None) -> float | None:
+    """Convert an internal Fahrenheit delta to the Home Assistant unit."""
+    if is_celsius(unit):
+        return f_to_c_delta(value)
+    return value

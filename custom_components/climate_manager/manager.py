@@ -40,7 +40,17 @@ from .const import (
     WINDOWS_FREEZE_PROTECTION_HEAT_TARGET,
     WINDOWS_FREEZE_PROTECTION_OUTDOOR_TEMP,
 )
-from .helpers import clamp, curve_weight_for_profile, nearly_equal, now, state_float, state_is_on, state_text
+from .helpers import (
+    clamp,
+    curve_weight_for_profile,
+    from_ha_temp,
+    nearly_equal,
+    now,
+    state_float,
+    state_is_on,
+    state_text,
+    to_ha_temp,
+)
 from .models import ManagerConfig, RuntimeState, ThermostatSnapshot
 from .restore import RuntimeStore
 _LOGGER = logging.getLogger(__name__)
@@ -331,9 +341,13 @@ class ClimateManager:
                 base_cool = base_heat + 2.0
             return base_heat, base_cool
         return None, None
+    def _outdoor_temp_f(self) -> float | None:
+        """Outdoor temperature in internal Fahrenheit (converted from the HA unit)."""
+        return from_ha_temp(state_float(self.hass, self.config.outdoor_temp_entity), self.config.temperature_unit)
+
     def _should_use_freeze_protection(self) -> bool:
         season = self._current_season()
-        outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
+        outdoor = self._outdoor_temp_f()
         return season == SEASON_WINTER and outdoor is not None and outdoor <= WINDOWS_FREEZE_PROTECTION_OUTDOOR_TEMP
     def _current_season(self) -> str:
         season = (state_text(self.hass, self.config.season_entity) or "").strip().lower()
@@ -362,7 +376,7 @@ class ClimateManager:
             base_cool += cool_delta
         return base_heat, base_cool
     def _resolve_heat_curve_offset(self, profile: str) -> float:
-        outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
+        outdoor = self._outdoor_temp_f()
         if outdoor is None:
             return 0.0
         if outdoor <= self.config.curve_band_1_max:
@@ -385,7 +399,7 @@ class ClimateManager:
         )
         return weighted
     def _resolve_cool_curve_offset(self, profile: str) -> float:
-        outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
+        outdoor = self._outdoor_temp_f()
         if outdoor is None:
             return 0.0
         if outdoor >= self.config.cool_curve_band_4_min:
@@ -455,9 +469,12 @@ class ClimateManager:
             if value is None:
                 return None
             try:
-                return float(value)
+                value = float(value)
             except (TypeError, ValueError):
                 return None
+            # The thermostat reports temperatures in the HA unit; convert to the
+            # internal Fahrenheit so the rest of the manager is unit-agnostic.
+            return from_ha_temp(value, self.config.temperature_unit)
         return ThermostatSnapshot(
             hvac_mode=state.state,
             target_temp=attr_float("temperature"),
@@ -881,10 +898,14 @@ class ClimateManager:
                 blocking=True,
             )
         if target_temp is not None:
+            # target_temp arrives in internal Fahrenheit; convert to the HA unit.
             await self.hass.services.async_call(
                 "climate",
                 "set_temperature",
-                {ATTR_ENTITY_ID: self.config.thermostat_entity, "temperature": target_temp},
+                {
+                    ATTR_ENTITY_ID: self.config.thermostat_entity,
+                    "temperature": to_ha_temp(target_temp, self.config.temperature_unit),
+                },
                 blocking=True,
             )
         await self.async_recalculate("set_temporary_override")
@@ -974,13 +995,17 @@ class ClimateManager:
                 target_temp_high,
                 MIN_HEAT_COOL_SPREAD,
             )
+        # Targets are computed in Fahrenheit; convert only the outgoing payload to
+        # the HA unit. The command snapshot below stays in Fahrenheit so it matches
+        # the (also Fahrenheit-converted) observed thermostat snapshot for self-echo.
+        unit = self.config.temperature_unit
         data: dict[str, Any] = {ATTR_ENTITY_ID: self.config.thermostat_entity}
         if temperature is not None:
-            data["temperature"] = temperature
+            data["temperature"] = to_ha_temp(temperature, unit)
         if target_temp_low is not None:
-            data["target_temp_low"] = target_temp_low
+            data["target_temp_low"] = to_ha_temp(target_temp_low, unit)
         if target_temp_high is not None:
-            data["target_temp_high"] = target_temp_high
+            data["target_temp_high"] = to_ha_temp(target_temp_high, unit)
         self.last_action = f"set_temperature:{data}"
         _LOGGER.debug("Applying temperature payload %s to %s", data, self.config.thermostat_entity)
         await self.hass.services.async_call("climate", "set_temperature", data, blocking=True)
