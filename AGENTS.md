@@ -1,108 +1,92 @@
-# AGENTS.md
+## Climate Manager Control Philosophy
 
-## Purpose
+Climate Manager must be comfort-centered, not season-centered.
 
-Climate Manager is a Home Assistant custom integration that manages an existing thermostat using profile-based targets and helper entities. It does not replace the thermostat entity. It observes the thermostat and optional context such as sleep, away, guest, override lock, windows, and season, then applies the desired HVAC mode and target temperatures for the current situation.
+The primary goal is:
+- User sets a desired comfort target, default 70°F.
+- Climate Manager chooses the safest HVAC mode and target settings needed to keep the home near that comfort target.
+- Outdoor temperature, forecast/weather, occupancy/home mode, window/door states, and manual controls adjust behavior around the comfort target.
+- Seasons are only guidance for whether the home is in heating season, cooling season, or transition season. Seasons must not become the main source of comfort math.
 
-Use this file as the default operating guide for coding agents working in this repository.
+### Required behavior model
 
-## Repository Scope
+Use this hierarchy:
 
-This repository ships a Home Assistant custom integration for the `climate_manager` domain.
+1. Safety and blocking states
+   - Master disabled
+   - Manual override
+   - Override lock
+   - Pause
+   - Window/door backoff
+   - Unavailable required entities
 
-Important package roots:
-- `custom_components/climate_manager`: integration source
-- `.github/workflows`: repository validation and release workflows
-- `assets` and `brand`: distribution and branding assets
-- `README.md`: user-facing behavior, installation, and option documentation
-- `hacs.json`: HACS metadata
+2. Explicit user HVAC preference
+   - Off, Heat, Cool, and explicit modes remain authoritative.
+   - Do not let outdoor boost or season logic override explicit user choices.
 
-## Primary Code Map
+3. Comfort-centered Auto behavior
+   - Default comfort target: 70°F.
+   - Heating season primarily uses heat mode.
+   - Cooling season primarily uses cool mode.
+   - Transition season uses heat_cool/Auto with a configurable comfort band.
+   - Default transition band: 6°F total.
+     - Heat = comfort_target - 3
+     - Cool = comfort_target + 3
 
-Core integration files:
-- `custom_components/climate_manager/__init__.py`: integration setup and unload entrypoints
-- `custom_components/climate_manager/config_flow.py`: config flow and options flow
-- `custom_components/climate_manager/coordinator.py`: orchestration between Home Assistant state and manager logic
-- `custom_components/climate_manager/manager.py`: primary control logic and decision-making
-- `custom_components/climate_manager/models.py`: internal state models and typed structures
-- `custom_components/climate_manager/helpers.py`: shared utility helpers
-- `custom_components/climate_manager/restore.py`: restored runtime state
-- `custom_components/climate_manager/entity.py`: shared entity base behavior
-- `custom_components/climate_manager/sensor.py`: sensors exposed by the integration
-- `custom_components/climate_manager/binary_sensor.py`: binary sensors exposed by the integration
-- `custom_components/climate_manager/button.py`: control buttons such as recalculate or clear override
-- `custom_components/climate_manager/switch.py`: master enable switch
-- `custom_components/climate_manager/const.py`: constants and option keys
-- `custom_components/climate_manager/services.yaml`: service definitions
-- `custom_components/climate_manager/strings.json` and `translations/`: UI strings and localization
-- `custom_components/climate_manager/manifest.json`: Home Assistant manifest metadata
+4. Outdoor boost behavior
+   - Outdoor boost should pull the active comfort side closer to the comfort target.
+   - Outdoor boost should not push beyond the comfort target by default.
+   - In transition Auto mode, preserve the thermostat’s required heat/cool gap.
+   - Example with comfort_target = 70 and minimum_auto_gap = 6:
+     - Normal transition: heat 67 / cool 73
+     - Hot boost: cool 70 / heat 64
+     - Cold boost: heat 70 / cool 76
+   - The opposite side must move as needed so Ecobee/HA does not reject the setpoint range.
 
-## Working Rules
+5. Seasonal purpose
+   - Winter/heating season: focus on heat and optionally raise heat target slightly during extreme cold.
+   - Summer/cooling season: focus on cool and optionally lower cool target slightly during extreme heat.
+   - Spring/fall/transition: use Auto range unless outdoor conditions justify narrowing the active side toward comfort.
 
-When making changes in this repository:
-- Preserve Home Assistant custom integration conventions and keep the domain as `climate_manager`.
-- Prefer small, behavior-focused changes over broad refactors.
-- Keep user-visible behavior aligned with `README.md`, `services.yaml`, `strings.json`, and translations.
-- Update docs when configuration, entities, services, or runtime behavior changes.
-- Avoid introducing machine-specific absolute paths, editor-specific assumptions, or private environment details into committed files.
-- Treat runtime persistence and manual override behavior as sensitive areas; changes there should be deliberate and easy to reason about.
+### Migration safety
 
-## Change Strategy
+Do not break current working behavior in one large rewrite.
 
-Before editing:
-- Identify whether the change belongs in config flow, runtime coordination, manager logic, entity exposure, or docs.
-- Check whether new behavior also requires updates to manifest metadata, services, strings, or README examples.
+Prefer a staged migration:
+1. Add comfort-centered calculation helpers while keeping current entities/options working.
+2. Preserve existing option names where practical.
+3. Add new options with defaults instead of removing old ones immediately.
+4. Maintain backwards-compatible fallback behavior for existing installs.
+5. Keep explicit user controls, manual override, pause, override lock, and window/door backoff behavior intact.
+6. Add diagnostics/entities or attributes that expose:
+   - comfort target
+   - resolved HVAC mode
+   - transition heat target
+   - transition cool target
+   - outdoor boost state
+   - active control reason
 
-While editing:
-- Keep logic centralized rather than duplicating profile or HVAC decision rules across files.
-- Reuse helper and model layers when possible.
-- Keep naming consistent with existing Home Assistant entity concepts and Climate Manager vocabulary.
+### README requirement
 
-After editing:
-- Re-read the affected user-facing surfaces for consistency.
-- Verify that added or renamed options are reflected anywhere they are surfaced.
-- Verify that integration metadata still matches repository structure.
+Any behavior change must update `README.md`.
 
-## Validation
+`README.md` must reflect the current version’s actual behavior and must include the information a Home Assistant user needs to install, configure, understand, and troubleshoot the integration.
 
-This repository includes a GitHub validation workflow in `.github/workflows/validate.yml`.
+At minimum, README updates must cover:
+- Installation method
+- Required entities
+- Optional entities
+- Setup flow/options
+- Comfort target behavior
+- Heating season behavior
+- Cooling season behavior
+- Transition Auto behavior
+- Ecobee heat/cool minimum gap handling
+- Outdoor boost behavior
+- Window/door and manual override behavior
+- Example settings
+- Troubleshooting checklist
+- Known limitations
+- Migration notes when behavior changes
 
-At minimum, changes should preserve:
-- `custom_components/climate_manager/manifest.json`
-- `custom_components/climate_manager/__init__.py`
-- `custom_components/climate_manager/config_flow.py`
-- `hacs.json`
-
-The workflow also validates that:
-- manifest domain remains `climate_manager`
-- `config_flow` remains `true`
-- manifest includes a `version`
-
-If local testing is limited, at least sanity-check the changed files for import correctness, Home Assistant integration structure, and README or metadata drift.
-
-## Documentation Expectations
-
-If a change affects any of the following, update documentation in the same pass when practical:
-- created entities
-- service behavior
-- config flow fields or option flow settings
-- manual override behavior
-- HVAC mode selection behavior
-- seasonal or outdoor-temperature target logic
-
-## Path Continuity For Local Threads
-
-Repository copies may move between local folders over time. When continuing work from an older Codex thread or note:
-- treat an old local workspace path as historical context, not a different project
-- use the currently opened repository as the source of truth
-- translate stale local paths to the current workspace before running commands or editing files
-- avoid creating duplicate assumptions or duplicate project summaries solely because the local folder changed
-
-## Good Agent First Step
-
-When starting a fresh thread in this repo:
-1. Confirm the active workspace path.
-2. Read `README.md` and the relevant integration files for the requested change.
-3. Check whether the task touches runtime logic, config flow, entities, or docs.
-4. Make the change in the smallest coherent set of files.
-5. Validate that user-facing docs and metadata still match the implementation.
+Do not leave README describing older season-first behavior after comfort-centered code is introduced.
