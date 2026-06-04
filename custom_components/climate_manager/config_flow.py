@@ -63,6 +63,18 @@ def _normalize_options(defaults: dict[str, Any] | None = None) -> dict[str, Any]
         CONF_COOL_CURVE_WEIGHT_SLEEP: float(data.get(CONF_COOL_CURVE_WEIGHT_SLEEP, DEFAULT_COOL_CURVE_WEIGHT_SLEEP)),
         CONF_COOL_CURVE_WEIGHT_GUEST: float(data.get(CONF_COOL_CURVE_WEIGHT_GUEST, DEFAULT_COOL_CURVE_WEIGHT_GUEST)),
         CONF_COOL_CURVE_WEIGHT_AWAY: float(data.get(CONF_COOL_CURVE_WEIGHT_AWAY, DEFAULT_COOL_CURVE_WEIGHT_AWAY)),
+        CONF_COMFORT_TARGET: float(data.get(CONF_COMFORT_TARGET, DEFAULT_COMFORT_TARGET)),
+        CONF_TRANSITION_BAND: float(data.get(CONF_TRANSITION_BAND, DEFAULT_TRANSITION_BAND)),
+        CONF_MINIMUM_AUTO_GAP: float(data.get(CONF_MINIMUM_AUTO_GAP, DEFAULT_MINIMUM_AUTO_GAP)),
+        CONF_OUTDOOR_COOL_OVERRIDE_TEMP: float(
+            data.get(CONF_OUTDOOR_COOL_OVERRIDE_TEMP, DEFAULT_OUTDOOR_COOL_OVERRIDE_TEMP)
+        ),
+        CONF_OUTDOOR_HEAT_OVERRIDE_TEMP: float(
+            data.get(CONF_OUTDOOR_HEAT_OVERRIDE_TEMP, DEFAULT_OUTDOOR_HEAT_OVERRIDE_TEMP)
+        ),
+        CONF_OUTDOOR_OVERRIDE_DEADBAND: float(
+            data.get(CONF_OUTDOOR_OVERRIDE_DEADBAND, DEFAULT_OUTDOOR_OVERRIDE_DEADBAND)
+        ),
         CONF_MANUAL_TEMP_BEHAVIOR: str(data.get(CONF_MANUAL_TEMP_BEHAVIOR, MANUAL_BEHAVIOR_TEMPORARY)),
         CONF_MANUAL_MODE_BEHAVIOR: str(data.get(CONF_MANUAL_MODE_BEHAVIOR, MANUAL_BEHAVIOR_TEMPORARY)),
         CONF_OVERRIDE_DURATION_MINUTES: int(data.get(CONF_OVERRIDE_DURATION_MINUTES, DEFAULT_OVERRIDE_DURATION_MINUTES)),
@@ -145,6 +157,12 @@ def _build_options_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(CONF_COOL_CURVE_WEIGHT_SLEEP, default=defaults[CONF_COOL_CURVE_WEIGHT_SLEEP]): _float_box(defaults[CONF_COOL_CURVE_WEIGHT_SLEEP], min_value=0, max_value=5, step=0.1),
             vol.Required(CONF_COOL_CURVE_WEIGHT_GUEST, default=defaults[CONF_COOL_CURVE_WEIGHT_GUEST]): _float_box(defaults[CONF_COOL_CURVE_WEIGHT_GUEST], min_value=0, max_value=5, step=0.1),
             vol.Required(CONF_COOL_CURVE_WEIGHT_AWAY, default=defaults[CONF_COOL_CURVE_WEIGHT_AWAY]): _float_box(defaults[CONF_COOL_CURVE_WEIGHT_AWAY], min_value=0, max_value=5, step=0.1),
+            vol.Required(CONF_COMFORT_TARGET, default=defaults[CONF_COMFORT_TARGET]): _float_box(defaults[CONF_COMFORT_TARGET], min_value=30, max_value=100),
+            vol.Required(CONF_TRANSITION_BAND, default=defaults[CONF_TRANSITION_BAND]): _float_box(defaults[CONF_TRANSITION_BAND], min_value=0, max_value=20),
+            vol.Required(CONF_MINIMUM_AUTO_GAP, default=defaults[CONF_MINIMUM_AUTO_GAP]): _float_box(defaults[CONF_MINIMUM_AUTO_GAP], min_value=0, max_value=20),
+            vol.Required(CONF_OUTDOOR_COOL_OVERRIDE_TEMP, default=defaults[CONF_OUTDOOR_COOL_OVERRIDE_TEMP]): _float_box(defaults[CONF_OUTDOOR_COOL_OVERRIDE_TEMP], min_value=-50, max_value=150, step=0.1),
+            vol.Required(CONF_OUTDOOR_HEAT_OVERRIDE_TEMP, default=defaults[CONF_OUTDOOR_HEAT_OVERRIDE_TEMP]): _float_box(defaults[CONF_OUTDOOR_HEAT_OVERRIDE_TEMP], min_value=-50, max_value=150, step=0.1),
+            vol.Required(CONF_OUTDOOR_OVERRIDE_DEADBAND, default=defaults[CONF_OUTDOOR_OVERRIDE_DEADBAND]): _float_box(defaults[CONF_OUTDOOR_OVERRIDE_DEADBAND], min_value=0, max_value=20),
             vol.Required(CONF_MANUAL_TEMP_BEHAVIOR, default=defaults[CONF_MANUAL_TEMP_BEHAVIOR]): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=MANUAL_BEHAVIOR_OPTIONS, mode=selector.SelectSelectorMode.DROPDOWN)
             ),

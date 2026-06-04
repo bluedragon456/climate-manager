@@ -49,6 +49,12 @@ class ManagerConfig:
     cool_curve_weight_sleep: float = 0.5
     cool_curve_weight_guest: float = 1.0
     cool_curve_weight_away: float = 0.0
+    comfort_target: float = 70.0
+    transition_band: float = 6.0
+    minimum_auto_gap: float = 6.0
+    outdoor_cool_override_temp: float = 80.0
+    outdoor_heat_override_temp: float = 55.0
+    outdoor_override_deadband: float = 2.0
     manual_temp_behavior: str = "temporary_override"
     manual_mode_behavior: str = "temporary_override"
     override_duration_minutes: int = 120
@@ -74,6 +80,10 @@ class RuntimeState:
     target_heat: float | None = None
     target_cool: float | None = None
     comfort_offset: float = 0.0
+    transition_heat_target: float | None = None
+    transition_cool_target: float | None = None
+    outdoor_boost_state: str = "none"
+    active_control_reason: str | None = None
     manual_override_active: bool = False
     manual_override_until: datetime | None = None
     manual_hold: bool = False

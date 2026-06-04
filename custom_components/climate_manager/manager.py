@@ -9,6 +9,7 @@ from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from .const import (
+    HVAC_PREF_AUTO,
     HVAC_PREF_COOL,
     HVAC_PREF_HEAT,
     HVAC_PREF_OFF,
@@ -46,6 +47,9 @@ from .restore import RuntimeStore
 _LOGGER = logging.getLogger(__name__)
 _UNSET = object()
 MIN_HEAT_COOL_SPREAD = 5.0
+OUTDOOR_BOOST_NONE = "none"
+OUTDOOR_BOOST_HOT = "hot"
+OUTDOOR_BOOST_COLD = "cold"
 SEASONAL_BASELINES: dict[str, tuple[float, float]] = {
     SEASON_WINTER: (69.0, 74.0),
     SEASON_SPRING: (66.0, 71.0),
@@ -270,26 +274,52 @@ class ClimateManager:
         return PROFILE_HOME
     def _resolve_desired_hvac_mode(self, profile: str) -> str | None:
         if profile in {PROFILE_PAUSED, PROFILE_OVERRIDE_LOCK, PROFILE_MANUAL_OVERRIDE}:
+            self.runtime.active_control_reason = f"blocked:{profile}"
             return None
         if profile == PROFILE_SENSORS_OPEN:
             if self.config.windows_action == WINDOWS_ACTION_OFF:
                 if self._should_use_freeze_protection():
+                    self.runtime.active_control_reason = "windows_freeze_protection"
                     return HVAC_PREF_HEAT
+                self.runtime.active_control_reason = "windows_backoff_off"
                 return HVAC_PREF_OFF
             if self.config.windows_action == WINDOWS_ACTION_HEAT_SETBACK:
+                self.runtime.active_control_reason = "windows_heat_setback"
                 return HVAC_PREF_HEAT
             if self.config.windows_action == WINDOWS_ACTION_COOL_SETBACK:
+                self.runtime.active_control_reason = "windows_cool_setback"
                 return HVAC_PREF_COOL
         preference = self.config.hvac_preference
         if preference in {HVAC_PREF_HEAT, HVAC_PREF_COOL, HVAC_PREF_OFF}:
+            self.runtime.outdoor_boost_state = OUTDOOR_BOOST_NONE
+            self.runtime.active_control_reason = f"explicit_{preference}"
             return preference
+        if preference != HVAC_PREF_AUTO:
+            self.runtime.active_control_reason = "unknown_preference_transition"
+            return "heat_cool"
+        self._resolve_outdoor_boost_state()
         season = self._current_season()
         if season == SEASON_WINTER:
+            self.runtime.active_control_reason = self._auto_control_reason("heating_season")
             return HVAC_PREF_HEAT
         if season == SEASON_SUMMER:
+            self.runtime.active_control_reason = self._auto_control_reason("cooling_season")
             return HVAC_PREF_COOL
+        self.runtime.active_control_reason = self._auto_control_reason("transition")
         return "heat_cool"
     def _resolve_targets(self, profile: str, desired_mode: str | None) -> tuple[float | None, float | None]:
+        self.runtime.transition_heat_target = None
+        self.runtime.transition_cool_target = None
+        if self._should_use_comfort_auto_targets(profile, desired_mode):
+            return self._resolve_comfort_auto_targets(desired_mode)
+        return self._resolve_profile_curve_targets(profile, desired_mode)
+    def _should_use_comfort_auto_targets(self, profile: str, desired_mode: str | None) -> bool:
+        return (
+            self.config.hvac_preference == HVAC_PREF_AUTO
+            and desired_mode in {HVAC_PREF_HEAT, HVAC_PREF_COOL, "heat_cool"}
+            and profile not in {PROFILE_PAUSED, PROFILE_OVERRIDE_LOCK, PROFILE_MANUAL_OVERRIDE, PROFILE_SENSORS_OPEN}
+        )
+    def _resolve_profile_curve_targets(self, profile: str, desired_mode: str | None) -> tuple[float | None, float | None]:
         base_heat = None
         base_cool = None
         if profile not in {PROFILE_PAUSED, PROFILE_OVERRIDE_LOCK, PROFILE_MANUAL_OVERRIDE}:
@@ -331,6 +361,74 @@ class ClimateManager:
                 base_cool = base_heat + 2.0
             return base_heat, base_cool
         return None, None
+    def _resolve_comfort_auto_targets(self, desired_mode: str | None) -> tuple[float | None, float | None]:
+        comfort = self.config.comfort_target
+        boost = self.runtime.outdoor_boost_state
+        if desired_mode == "heat_cool":
+            self.runtime.comfort_offset = self._comfort_transition_offset(boost)
+            target_heat, target_cool = self._comfort_transition_range(boost)
+            self.runtime.transition_heat_target = target_heat
+            self.runtime.transition_cool_target = target_cool
+            return target_heat, target_cool
+        self.runtime.comfort_offset = 0.0
+        if desired_mode == HVAC_PREF_HEAT:
+            return clamp(comfort, self.config.min_heat_target, self.config.max_heat_target), None
+        if desired_mode == HVAC_PREF_COOL:
+            return None, clamp(comfort, self.config.min_cool_target, self.config.max_cool_target)
+        return None, None
+    def _comfort_transition_range(self, boost: str) -> tuple[float, float]:
+        comfort = self.config.comfort_target
+        minimum_gap = self._minimum_auto_gap()
+        if boost == OUTDOOR_BOOST_HOT:
+            target_cool = comfort
+            target_heat = target_cool - minimum_gap
+        elif boost == OUTDOOR_BOOST_COLD:
+            target_heat = comfort
+            target_cool = target_heat + minimum_gap
+        else:
+            band = max(self.config.transition_band, minimum_gap)
+            half_band = band / 2
+            target_heat = comfort - half_band
+            target_cool = comfort + half_band
+        return self.normalize_heat_cool_range(target_heat, target_cool, update_reason=True)
+    def _comfort_transition_offset(self, boost: str) -> float:
+        if boost == OUTDOOR_BOOST_HOT:
+            return -(self.config.transition_band / 2)
+        if boost == OUTDOOR_BOOST_COLD:
+            return self.config.transition_band / 2
+        return 0.0
+    def _minimum_auto_gap(self) -> float:
+        return max(MIN_HEAT_COOL_SPREAD, self.config.minimum_auto_gap)
+    def _append_active_control_reason(self, reason: str) -> None:
+        current = self.runtime.active_control_reason or "unknown"
+        parts = current.split(":")
+        if reason not in parts:
+            self.runtime.active_control_reason = f"{current}:{reason}"
+    def _resolve_outdoor_boost_state(self) -> str:
+        outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
+        if outdoor is None:
+            self.runtime.outdoor_boost_state = OUTDOOR_BOOST_NONE
+            return OUTDOOR_BOOST_NONE
+        current = self.runtime.outdoor_boost_state
+        cool_threshold = self.config.outdoor_cool_override_temp
+        heat_threshold = self.config.outdoor_heat_override_temp
+        deadband = self.config.outdoor_override_deadband
+        if current == OUTDOOR_BOOST_HOT and outdoor >= cool_threshold - deadband:
+            return current
+        if current == OUTDOOR_BOOST_COLD and outdoor <= heat_threshold + deadband:
+            return current
+        if outdoor >= cool_threshold:
+            self.runtime.outdoor_boost_state = OUTDOOR_BOOST_HOT
+        elif outdoor <= heat_threshold:
+            self.runtime.outdoor_boost_state = OUTDOOR_BOOST_COLD
+        else:
+            self.runtime.outdoor_boost_state = OUTDOOR_BOOST_NONE
+        return self.runtime.outdoor_boost_state
+    def _auto_control_reason(self, base: str) -> str:
+        boost = self.runtime.outdoor_boost_state
+        if boost != OUTDOOR_BOOST_NONE:
+            return f"auto_{base}_{boost}_boost"
+        return f"auto_{base}"
     def _should_use_freeze_protection(self) -> bool:
         season = self._current_season()
         outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
@@ -429,6 +527,10 @@ class ClimateManager:
         if desired_mode == HVAC_PREF_COOL and self.runtime.target_cool is not None:
             return self.runtime.target_cool
         if desired_mode == "heat_cool":
+            if self.runtime.outdoor_boost_state == OUTDOOR_BOOST_HOT and self.runtime.target_cool is not None:
+                return self.runtime.target_cool
+            if self.runtime.outdoor_boost_state == OUTDOOR_BOOST_COLD and self.runtime.target_heat is not None:
+                return self.runtime.target_heat
             if self.runtime.target_heat is not None:
                 return self.runtime.target_heat
             if self.runtime.target_cool is not None:
@@ -479,25 +581,41 @@ class ClimateManager:
         self,
         target_temp_low: float | None,
         target_temp_high: float | None,
+        *,
+        update_reason: bool = False,
     ) -> tuple[float | None, float | None]:
         if target_temp_low is None or target_temp_high is None:
             return target_temp_low, target_temp_high
-        spread = target_temp_high - target_temp_low
-        if spread >= MIN_HEAT_COOL_SPREAD:
+        min_spread = self._minimum_auto_gap()
+        min_heat = self.config.min_heat_target
+        max_heat = self.config.max_heat_target
+        min_cool = self.config.min_cool_target
+        max_cool = self.config.max_cool_target
+        if min_heat > max_heat or min_cool > max_cool:
+            if update_reason:
+                self._append_active_control_reason("range_limits_invalid")
             return target_temp_low, target_temp_high
+        target_temp_low = clamp(target_temp_low, min_heat, max_heat)
+        target_temp_high = clamp(target_temp_high, min_cool, max_cool)
+        if target_temp_high - target_temp_low >= min_spread:
+            return target_temp_low, target_temp_high
+        if max_cool - min_heat < min_spread:
+            if update_reason:
+                self._append_active_control_reason("range_gap_limited")
+            return min_heat, max_cool
         # Anchor the side that matches the current comfort adjustment direction.
         # Positive offsets should not lower the requested heat target.
         # Negative offsets should not raise the requested cool target.
         if self.runtime.comfort_offset < 0:
-            normalized_high = target_temp_high
-            normalized_low = target_temp_high - MIN_HEAT_COOL_SPREAD
-            if normalized_low > target_temp_low:
-                normalized_low = target_temp_low
+            cool_floor = max(min_cool, min_heat + min_spread)
+            cool_ceiling = min(max_cool, max_heat + min_spread)
+            normalized_high = clamp(target_temp_high, cool_floor, cool_ceiling)
+            normalized_low = normalized_high - min_spread
         else:
-            normalized_low = target_temp_low
-            normalized_high = target_temp_low + MIN_HEAT_COOL_SPREAD
-            if normalized_high < target_temp_high:
-                normalized_high = target_temp_high
+            heat_floor = max(min_heat, min_cool - min_spread)
+            heat_ceiling = min(max_heat, max_cool - min_spread)
+            normalized_low = clamp(target_temp_low, heat_floor, heat_ceiling)
+            normalized_high = normalized_low + min_spread
         return normalized_low, normalized_high
     def is_equivalent_heat_cool_range(
         self,
@@ -935,7 +1053,11 @@ class ClimateManager:
             if not nearly_equal(thermostat.target_temp, target_cool, self.config.temp_change_threshold):
                 await self._async_set_temperature(temperature=target_cool)
         elif desired_mode == "heat_cool" and target_heat is not None and target_cool is not None:
-            normalized_heat, normalized_cool = self.normalize_heat_cool_range(target_heat, target_cool)
+            normalized_heat, normalized_cool = self.normalize_heat_cool_range(
+                target_heat,
+                target_cool,
+                update_reason=True,
+            )
             if not self.is_equivalent_heat_cool_range(
                 thermostat.target_temp_low,
                 thermostat.target_temp_high,
@@ -972,7 +1094,7 @@ class ClimateManager:
                 requested_target_temp_high,
                 target_temp_low,
                 target_temp_high,
-                MIN_HEAT_COOL_SPREAD,
+                self._minimum_auto_gap(),
             )
         data: dict[str, Any] = {ATTR_ENTITY_ID: self.config.thermostat_entity}
         if temperature is not None:

@@ -109,6 +109,37 @@ SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
         value_fn=lambda manager: manager.runtime.comfort_offset,
     ),
     ClimateManagerSensorDescription(
+        key="comfort_target",
+        translation_key="comfort_target",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        value_fn=lambda manager: manager.config.comfort_target,
+    ),
+    ClimateManagerSensorDescription(
+        key="transition_heat_target",
+        translation_key="transition_heat_target",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        value_fn=lambda manager: _temperature_or_zero(manager.runtime.transition_heat_target),
+    ),
+    ClimateManagerSensorDescription(
+        key="transition_cool_target",
+        translation_key="transition_cool_target",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        value_fn=lambda manager: _temperature_or_zero(manager.runtime.transition_cool_target),
+    ),
+    ClimateManagerSensorDescription(
+        key="outdoor_boost_state",
+        translation_key="outdoor_boost_state",
+        value_fn=lambda manager: manager.runtime.outdoor_boost_state,
+    ),
+    ClimateManagerSensorDescription(
+        key="active_control_reason",
+        translation_key="active_control_reason",
+        value_fn=lambda manager: manager.runtime.active_control_reason,
+    ),
+    ClimateManagerSensorDescription(
         key="status",
         translation_key="status",
         value_fn=lambda manager: manager.runtime.status,

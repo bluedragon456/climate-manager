@@ -1,6 +1,6 @@
 # Climate Manager
 
-Climate Manager is a Home Assistant custom integration that manages an existing thermostat using profile-based targets and a small set of helper entities. It does not replace your thermostat entity. Instead, it watches your thermostat and optional context signals like sleep, away, guest, override lock, windows, and season, then applies the temperature or HVAC mode you want for the current situation.
+Climate Manager is a Home Assistant custom integration that manages an existing thermostat around a configurable comfort target. It does not replace your thermostat entity. Instead, it watches your thermostat and optional context signals like sleep, away, guest, override lock, windows, and season, then applies the safest HVAC mode and target settings needed for the current situation.
 
 This integration is a good fit if you already have a working `climate` entity in Home Assistant and want smarter target management without building a large automation stack by hand.
 
@@ -10,8 +10,9 @@ Climate Manager currently:
 
 - Controls an existing thermostat entity
 - Supports `home`, `sleep`, `guest`, `away`, `manual override`, `override lock`, `windows open`, and `paused` states
-- Applies heating and cooling comfort offsets based on outdoor temperature
-- Applies season-aware baseline shifts for `winter`, `spring`, `summer`, and `fall`
+- Uses comfort-centered Auto control with a default `70 F` comfort target
+- Shapes transition-season Auto ranges around outdoor hot and cold boost conditions
+- Preserves profile targets and outdoor curves for explicit Heat/Cool behavior
 - Detects manual thermostat setpoint and HVAC mode changes
 - Can ignore manual changes, treat them as a temporary override, or hold them until cleared
 - Exposes status sensors, control buttons, a master enable switch, and services
@@ -31,6 +32,11 @@ For each config entry, Climate Manager creates:
 - `Target heat`
 - `Target cool`
 - `Comfort offset`
+- `Comfort target`
+- `Transition heat target`
+- `Transition cool target`
+- `Outdoor boost state`
+- `Active control reason`
 - `Status`
 - `Override until`
 - `Windows backoff until`
@@ -117,6 +123,12 @@ The options flow lets you tune:
 - Home, sleep, guest, and away heat targets
 - Home, sleep, guest, and away cool targets
 - HVAC preference: `Auto`, `Heat`, `Cool`, or `Off`
+- Comfort target
+- Transition comfort band
+- Minimum Auto heat/cool gap
+- Outdoor hot boost temperature
+- Outdoor cold boost temperature
+- Outdoor boost deadband
 - Four outdoor-temperature heating curve bands and offsets
 - Four outdoor-temperature cooling curve bands and offsets
 - Per-profile heat and cool curve weights
@@ -149,44 +161,80 @@ Climate Manager resolves the active profile in this order:
 ## HVAC Mode Selection
 
 - If HVAC preference is `Heat`, `Cool`, or `Off`, that mode is used directly.
-- If HVAC preference is `Auto`, the season entity is used when available:
+- If HVAC preference is `Auto`, Climate Manager uses comfort-centered control and the season entity guides mode selection:
   - `winter` -> `heat`
   - `summer` -> `cool`
   - `spring`, `fall`, and `autumn` -> `heat_cool`
   - anything else -> `heat_cool`
 - During manual override, override lock, or paused mode, Climate Manager stops applying changes.
 
-## Seasonal Baselines
+## Comfort Target Behavior
 
-When a season entity is configured, Climate Manager shifts the configured profile targets before applying the outdoor curve. This keeps profile differences intact while nudging the whole house slightly warmer or cooler through the year.
+In `Auto`, Climate Manager centers control around `Comfort target`, default `70 F`.
 
-The seasonal home-equivalent baselines are:
+- Heating season normally uses `heat` at the comfort target.
+- Cooling season normally uses `cool` at the comfort target.
+- Transition season uses `heat_cool` around the comfort target.
+- Explicit `Heat`, `Cool`, and `Off` preferences do not use the comfort-centered Auto calculation.
 
-- `winter`: `69 / 74`
-- `spring`: `66 / 71`
-- `summer`: `66 / 71`
-- `fall` and `autumn`: `67 / 72`
+With the defaults:
 
-These seasonal baselines are applied as offsets relative to the neutral home baseline of `69 / 73`, then the usual profile targets, min/max clamps, and outdoor curve weights still apply.
+- `Comfort target`: `70 F`
+- `Transition comfort band`: `6 F`
+- `Minimum Auto heat/cool gap`: `6 F`
 
-## Outdoor Temperature Response
+Normal transition Auto is:
 
-Climate Manager resolves a base target from the active profile, then applies an outdoor-temperature offset for the active mode:
+- Heat target: `67 F`
+- Cool target: `73 F`
 
-- Heating uses the configured heat curve bands and heat curve weights.
-- Cooling uses the configured cool curve bands and cool curve weights.
-- The final target is clamped to your configured min and max target limits.
+## Transition Auto Behavior
 
-### Default Neutral Targets
+Spring, fall, autumn, missing season, and unknown season use transition Auto. Climate Manager keeps the thermostat in `heat_cool` and adjusts the range around the comfort target.
 
-- `Home`: `73 F`
-- `Sleep`: `72 F`
-- `Guest`: `73 F`
-- `Away`: `78 F`
+The active comfort side moves toward the comfort target while the opposite side moves enough to preserve the required Auto gap.
+
+| Situation | Heat target | Cool target |
+| --- | --- | --- |
+| Normal transition | `67 F` | `73 F` |
+| Hot boost | `64 F` | `70 F` |
+| Cold boost | `70 F` | `76 F` |
+
+The `Current set temp` sensor reports the active side during hot or cold boost. During normal transition it reports the heat side of the range.
+
+## Outdoor Boost Behavior
+
+Outdoor boost uses the outdoor temperature sensor only when HVAC preference is `Auto`.
+
+Defaults:
+
+- Hot boost starts at `80 F`
+- Cold boost starts at `55 F`
+- Boost deadband is `2 F`
+
+Hot boost remains active until outdoor temperature drops below `78 F`. Cold boost remains active until outdoor temperature rises above `57 F`.
+
+Outdoor boost does not override explicit `Heat`, `Cool`, or `Off`. In transition season, it primarily shapes the `heat_cool` range instead of forcing a single mode. In summer and winter, Climate Manager may already be using single-mode `cool` or `heat`, and the active target remains centered on the comfort target by default.
+
+## Ecobee Heat/Cool Minimum Gap Handling
+
+Some thermostats, including Ecobee, require a minimum spread between `target_temp_low` and `target_temp_high` in Auto/`heat_cool`.
+
+Climate Manager uses `Minimum Auto heat/cool gap`, default `6 F`, and will normalize outgoing Auto ranges so Home Assistant and the thermostat accept them. The built-in minimum is never lower than `5 F`.
+
+Final Auto ranges are normalized in one pass so they respect both the configured heat/cool min/max limits and the minimum Auto gap whenever that is possible. If the configured allowed range is narrower than the minimum Auto gap, Climate Manager falls back to the widest range allowed by the configured limits and adds `range_gap_limited` to `Active control reason`. If a configured min target is higher than its matching max target, `Active control reason` includes `range_limits_invalid`.
+
+## Legacy Profile And Curve Behavior
+
+The existing profile targets and outdoor curve options are not removed. They remain available for explicit/profile-style behavior, including explicit `Heat`, explicit `Cool`, and window/door setback behavior.
+
+In comfort-centered `Auto`, the new comfort target and transition range settings supersede the old season baseline/profile target math. Existing installs keep their old options, but Auto calculations now use the comfort-centered model.
+
+### Existing Outdoor Curve Options
 
 ### Default Heat Curve Behavior
 
-The default heat curve provides a positive comfort bump below `65 F`, then tapers down to neutral through `75 F`:
+The legacy heat curve provides a positive comfort bump below `65 F`, then tapers down to neutral through `75 F`:
 
 | Outdoor temperature | Default heat offset | Effect on heat target |
 | --- | --- | --- |
@@ -198,7 +246,7 @@ The default heat curve provides a positive comfort bump below `65 F`, then taper
 
 ### Default Cooling Curve Behavior
 
-The integration includes four outdoor-temperature cooling bands:
+The legacy cooling curve includes four outdoor-temperature cooling bands:
 
 - `65 F` to `75 F`
 - `75.1 F` to `84.9 F`
@@ -305,10 +353,14 @@ data:
 ## Notes and Limitations
 
 - Climate Manager controls your existing thermostat; it does not create a replacement `climate` entity.
-- Outdoor temperature can affect both heating and cooling targets.
-- Seasonal baselines currently recognize `winter`, `spring`, `summer`, `fall`, and `autumn`.
-- Cooling targets are clamped by your configured min and max values.
+- Outdoor temperature can activate hot or cold boost in `Auto`.
+- Season values currently recognize `winter`, `spring`, `summer`, `fall`, and `autumn`.
+- Heating and cooling targets are clamped by your configured min and max values whenever those limits can also satisfy the minimum Auto gap.
 - Auto mode works best when the season entity reports values like `winter`, `spring`, `summer`, or `fall`.
+- Outdoor boost state is persisted as normal runtime state. If the stored runtime state is cleared, boost state is recalculated from the current outdoor temperature on the next update.
+- If heat/cool min/max limits are too narrow to satisfy `Minimum Auto heat/cool gap`, `Active control reason` includes `range_gap_limited` and the thermostat may still reject the Auto range.
+- If a configured min target is higher than its matching max target, `Active control reason` includes `range_limits_invalid`; fix the option values before relying on Auto control.
+- Profile target and curve options are preserved, but comfort-centered `Auto` supersedes the old season baseline/profile target math.
 - If the thermostat is unavailable, Climate Manager stops applying changes and exposes that through `Fail-safe active` and `Status`.
 
 ## Troubleshooting
@@ -328,12 +380,29 @@ Check:
 
 Check:
 
-- `Desired HVAC mode` is actually `Cool` or `Auto` with the season entity reporting `summer`
-- `Target cool`, `Current set temp`, and `Comfort offset`
-- Your configured cool curve band offsets in the integration options
+- `Outdoor boost state`
+- `Active control reason`
+- `Comfort target`
+- `Transition cool target`
+- `Target cool`
+- `Current set temp`
 - Your outdoor temperature sensor reading against a local weather source for the same time period
 
-If `Comfort offset` stays at `0.0`, Climate Manager is in the neutral zone for the current mode or profile. With the repo defaults, that is expected whenever outdoor temperature stays between `65 F` and `75 F`.
+With the defaults, spring/fall transition Auto should move from `67 / 73` to `64 / 70` when hot boost activates at `80 F`. If `Outdoor boost state` stays `none`, check the outdoor temperature sensor and the configured hot boost threshold.
+
+### Heating Is Not Responding To Colder Outdoor Temperatures
+
+Check:
+
+- `Outdoor boost state`
+- `Active control reason`
+- `Comfort target`
+- `Transition heat target`
+- `Target heat`
+- `Current set temp`
+- Your outdoor temperature sensor reading against a local weather source for the same time period
+
+With the defaults, spring/fall transition Auto should move from `67 / 73` to `70 / 76` when cold boost activates at `55 F`.
 
 ### It Keeps Entering Manual Override
 
@@ -373,4 +442,17 @@ logger:
 
 ### Auto Mode Picks the Wrong HVAC Mode
 
-If HVAC preference is `Auto`, check the season entity state. `winter` maps to `heat`, `summer` maps to `cool`, and `spring`, `fall`, `autumn`, or any other value falls back to `heat_cool`.
+If HVAC preference is `Auto`, check the season entity state and `Active control reason`. `winter` maps to `heat`, `summer` maps to `cool`, and `spring`, `fall`, `autumn`, or any other value uses transition `heat_cool`.
+
+## Migration Notes
+
+Existing installs keep their current option values. New comfort-centered options are added with defaults:
+
+- `Comfort target`: `70 F`
+- `Transition comfort band`: `6 F`
+- `Minimum Auto heat/cool gap`: `6 F`
+- `Outdoor hot boost temperature`: `80 F`
+- `Outdoor cold boost temperature`: `55 F`
+- `Outdoor boost deadband`: `2 F`
+
+No old options are removed. In `Auto`, the new comfort-centered model supersedes old profile target and seasonal baseline behavior. Explicit `Heat`, explicit `Cool`, and window/door setback behavior continue to use the existing profile target and curve options.
