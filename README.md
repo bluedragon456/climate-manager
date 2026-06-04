@@ -123,7 +123,10 @@ The options flow lets you tune:
 - Home, sleep, guest, and away heat targets
 - Home, sleep, guest, and away cool targets
 - HVAC preference: `Auto`, `Heat`, `Cool`, or `Off`
-- Comfort target
+- Global comfort target fallback
+- Home comfort target
+- Sleep comfort target
+- Guest comfort target
 - Transition comfort band
 - Minimum Auto heat/cool gap
 - Outdoor hot boost temperature
@@ -168,18 +171,22 @@ Climate Manager resolves the active profile in this order:
   - anything else -> `heat_cool`
 - During manual override, override lock, or paused mode, Climate Manager stops applying changes.
 
-## Comfort Target Behavior
+## Profile Comfort Target Behavior
 
-In `Auto`, Climate Manager centers control around `Comfort target`, default `70 F`.
+In `Auto`, Climate Manager centers control around the active profile comfort target.
 
-- Heating season normally uses `heat` at the comfort target.
-- Cooling season normally uses `cool` at the comfort target.
-- Transition season uses `heat_cool` around the comfort target.
+- Home comfort defaults to `70 F`.
+- Sleep comfort defaults to `68 F`.
+- Guest comfort defaults to `70 F`.
+- Away uses the configured away heat/cool targets as a safety range instead of a comfort target.
+- Heating season normally uses `heat` at the active comfort target.
+- Cooling season normally uses `cool` at the active comfort target.
+- Transition season uses `heat_cool` around the active comfort target.
 - Explicit `Heat`, `Cool`, and `Off` preferences do not use the comfort-centered Auto calculation.
 
-With the defaults:
+With the home defaults:
 
-- `Comfort target`: `70 F`
+- `Home comfort target`: `70 F`
 - `Transition comfort band`: `6 F`
 - `Minimum Auto heat/cool gap`: `6 F`
 
@@ -201,6 +208,19 @@ The active comfort side moves toward the comfort target while the opposite side 
 | Cold boost | `70 F` | `76 F` |
 
 The `Current set temp` sensor reports the active side during hot or cold boost. During normal transition it reports the heat side of the range.
+
+Sleep uses the same math around its default `68 F` comfort target, so normal sleep transition is `65 / 71` before any curve adjustment.
+
+## Comfort Curve Behavior
+
+In comfort-centered `Auto`, Climate Manager applies a linear outdoor curve around the active profile comfort target:
+
+- If outdoor temperature is below the active comfort target, the heat side rises by `0.5 F` for every `3 F` of difference.
+- If outdoor temperature is above the active comfort target, the cool side lowers by `0.5 F` for every `3 F` of difference.
+- Existing per-profile heat and cool curve weights still scale the result.
+- Away mode does not use the comfort curve; it uses the configured away heat/cool safety range.
+
+Example: with home comfort `70 F` and outdoor temperature `64 F`, the heat curve adds `1.0 F` before final min/max and Auto-gap normalization.
 
 ## Outdoor Boost Behavior
 
@@ -226,9 +246,9 @@ Final Auto ranges are normalized in one pass so they respect both the configured
 
 ## Legacy Profile And Curve Behavior
 
-The existing profile targets and outdoor curve options are not removed. They remain available for explicit/profile-style behavior, including explicit `Heat`, explicit `Cool`, and window/door setback behavior.
+The existing profile targets and outdoor curve band options are not removed. They remain available for explicit/profile-style behavior, including explicit `Heat`, explicit `Cool`, and window/door setback behavior.
 
-In comfort-centered `Auto`, the new comfort target and transition range settings supersede the old season baseline/profile target math. Existing installs keep their old options, but Auto calculations now use the comfort-centered model.
+In comfort-centered `Auto`, the profile comfort targets and comfort-relative outdoor curve supersede the old season baseline/profile target math. Existing installs keep their old options, but Auto calculations now use the comfort-centered model.
 
 ### Existing Outdoor Curve Options
 
@@ -357,6 +377,7 @@ data:
 - Season values currently recognize `winter`, `spring`, `summer`, `fall`, and `autumn`.
 - Heating and cooling targets are clamped by your configured min and max values whenever those limits can also satisfy the minimum Auto gap.
 - Auto mode works best when the season entity reports values like `winter`, `spring`, `summer`, or `fall`.
+- Home, sleep, and guest use profile-specific comfort targets in `Auto`; away uses the away heat/cool safety range.
 - Outdoor boost state is persisted as normal runtime state. If the stored runtime state is cleared, boost state is recalculated from the current outdoor temperature on the next update.
 - If heat/cool min/max limits are too narrow to satisfy `Minimum Auto heat/cool gap`, `Active control reason` includes `range_gap_limited` and the thermostat may still reject the Auto range.
 - If a configured min target is higher than its matching max target, `Active control reason` includes `range_limits_invalid`; fix the option values before relying on Auto control.
@@ -448,11 +469,14 @@ If HVAC preference is `Auto`, check the season entity state and `Active control 
 
 Existing installs keep their current option values. New comfort-centered options are added with defaults:
 
-- `Comfort target`: `70 F`
+- `Comfort target`: `70 F` fallback
+- `Home comfort target`: `70 F`
+- `Sleep comfort target`: `68 F`
+- `Guest comfort target`: `70 F`
 - `Transition comfort band`: `6 F`
 - `Minimum Auto heat/cool gap`: `6 F`
 - `Outdoor hot boost temperature`: `80 F`
 - `Outdoor cold boost temperature`: `55 F`
 - `Outdoor boost deadband`: `2 F`
 
-No old options are removed. In `Auto`, the new comfort-centered model supersedes old profile target and seasonal baseline behavior. Explicit `Heat`, explicit `Cool`, and window/door setback behavior continue to use the existing profile target and curve options.
+No old options are removed. In `Auto`, the new comfort-centered model supersedes old profile target and seasonal baseline behavior. Explicit `Heat`, explicit `Cool`, away safety range, and window/door setback behavior continue to use the existing profile target and curve options.

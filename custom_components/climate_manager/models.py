@@ -50,6 +50,9 @@ class ManagerConfig:
     cool_curve_weight_guest: float = 1.0
     cool_curve_weight_away: float = 0.0
     comfort_target: float = 70.0
+    home_comfort_target: float = 70.0
+    sleep_comfort_target: float = 68.0
+    guest_comfort_target: float = 70.0
     transition_band: float = 6.0
     minimum_auto_gap: float = 6.0
     outdoor_cool_override_temp: float = 80.0
@@ -80,6 +83,7 @@ class RuntimeState:
     target_heat: float | None = None
     target_cool: float | None = None
     comfort_offset: float = 0.0
+    active_comfort_target: float | None = None
     transition_heat_target: float | None = None
     transition_cool_target: float | None = None
     outdoor_boost_state: str = "none"

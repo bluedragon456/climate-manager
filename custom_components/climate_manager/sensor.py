@@ -113,7 +113,9 @@ SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
         translation_key="comfort_target",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
-        value_fn=lambda manager: manager.config.comfort_target,
+        value_fn=lambda manager: manager.runtime.active_comfort_target
+        if manager.runtime.active_comfort_target is not None
+        else manager.config.comfort_target,
     ),
     ClimateManagerSensorDescription(
         key="transition_heat_target",

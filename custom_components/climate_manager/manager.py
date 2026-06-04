@@ -308,10 +308,11 @@ class ClimateManager:
         self.runtime.active_control_reason = self._auto_control_reason("transition")
         return "heat_cool"
     def _resolve_targets(self, profile: str, desired_mode: str | None) -> tuple[float | None, float | None]:
+        self.runtime.active_comfort_target = None
         self.runtime.transition_heat_target = None
         self.runtime.transition_cool_target = None
         if self._should_use_comfort_auto_targets(profile, desired_mode):
-            return self._resolve_comfort_auto_targets(desired_mode)
+            return self._resolve_comfort_auto_targets(profile, desired_mode)
         return self._resolve_profile_curve_targets(profile, desired_mode)
     def _should_use_comfort_auto_targets(self, profile: str, desired_mode: str | None) -> bool:
         return (
@@ -361,42 +362,83 @@ class ClimateManager:
                 base_cool = base_heat + 2.0
             return base_heat, base_cool
         return None, None
-    def _resolve_comfort_auto_targets(self, desired_mode: str | None) -> tuple[float | None, float | None]:
-        comfort = self.config.comfort_target
+    def _resolve_comfort_auto_targets(self, profile: str, desired_mode: str | None) -> tuple[float | None, float | None]:
+        if profile == PROFILE_AWAY:
+            self.runtime.comfort_offset = 0.0
+            if desired_mode == HVAC_PREF_HEAT:
+                return clamp(self.config.heat_away, self.config.min_heat_target, self.config.max_heat_target), None
+            if desired_mode == HVAC_PREF_COOL:
+                return None, clamp(self.config.cool_away, self.config.min_cool_target, self.config.max_cool_target)
+            if desired_mode == "heat_cool":
+                target_heat, target_cool = self.normalize_heat_cool_range(
+                    self.config.heat_away,
+                    self.config.cool_away,
+                    update_reason=True,
+                )
+                self.runtime.transition_heat_target = target_heat
+                self.runtime.transition_cool_target = target_cool
+                return target_heat, target_cool
+            return None, None
+        comfort = self._comfort_target_for_profile(profile)
+        self.runtime.active_comfort_target = comfort
+        heat_offset, cool_offset = self._resolve_comfort_curve_offsets(profile, comfort)
         boost = self.runtime.outdoor_boost_state
         if desired_mode == "heat_cool":
-            self.runtime.comfort_offset = self._comfort_transition_offset(boost)
-            target_heat, target_cool = self._comfort_transition_range(boost)
+            self.runtime.comfort_offset = self._comfort_transition_offset(boost, heat_offset, cool_offset)
+            target_heat, target_cool = self._comfort_transition_range(comfort, boost, heat_offset, cool_offset)
             self.runtime.transition_heat_target = target_heat
             self.runtime.transition_cool_target = target_cool
             return target_heat, target_cool
-        self.runtime.comfort_offset = 0.0
         if desired_mode == HVAC_PREF_HEAT:
-            return clamp(comfort, self.config.min_heat_target, self.config.max_heat_target), None
+            self.runtime.comfort_offset = heat_offset
+            return clamp(comfort + heat_offset, self.config.min_heat_target, self.config.max_heat_target), None
         if desired_mode == HVAC_PREF_COOL:
-            return None, clamp(comfort, self.config.min_cool_target, self.config.max_cool_target)
+            self.runtime.comfort_offset = cool_offset
+            return None, clamp(comfort + cool_offset, self.config.min_cool_target, self.config.max_cool_target)
         return None, None
-    def _comfort_transition_range(self, boost: str) -> tuple[float, float]:
-        comfort = self.config.comfort_target
+    def _comfort_target_for_profile(self, profile: str) -> float:
+        if profile == PROFILE_SLEEP:
+            return self.config.sleep_comfort_target
+        if profile == PROFILE_GUEST:
+            return self.config.guest_comfort_target
+        return self.config.home_comfort_target
+    def _resolve_comfort_curve_offsets(self, profile: str, comfort: float) -> tuple[float, float]:
+        outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
+        if outdoor is None:
+            return 0.0, 0.0
+        if outdoor < comfort:
+            heat_offset = round(((comfort - outdoor) / 3.0) * 0.5 * curve_weight_for_profile(self.config, profile), 1)
+            return heat_offset, 0.0
+        if outdoor > comfort:
+            cool_offset = round(-((outdoor - comfort) / 3.0) * 0.5 * curve_weight_for_profile(self.config, profile, cooling=True), 1)
+            return 0.0, cool_offset
+        return 0.0, 0.0
+    def _comfort_transition_range(
+        self,
+        comfort: float,
+        boost: str,
+        heat_offset: float,
+        cool_offset: float,
+    ) -> tuple[float, float]:
         minimum_gap = self._minimum_auto_gap()
         if boost == OUTDOOR_BOOST_HOT:
-            target_cool = comfort
+            target_cool = comfort + cool_offset
             target_heat = target_cool - minimum_gap
         elif boost == OUTDOOR_BOOST_COLD:
-            target_heat = comfort
+            target_heat = comfort + heat_offset
             target_cool = target_heat + minimum_gap
         else:
             band = max(self.config.transition_band, minimum_gap)
             half_band = band / 2
-            target_heat = comfort - half_band
-            target_cool = comfort + half_band
+            target_heat = comfort - half_band + heat_offset
+            target_cool = comfort + half_band + cool_offset
         return self.normalize_heat_cool_range(target_heat, target_cool, update_reason=True)
-    def _comfort_transition_offset(self, boost: str) -> float:
+    def _comfort_transition_offset(self, boost: str, heat_offset: float, cool_offset: float) -> float:
         if boost == OUTDOOR_BOOST_HOT:
-            return -(self.config.transition_band / 2)
+            return cool_offset - (self.config.transition_band / 2)
         if boost == OUTDOOR_BOOST_COLD:
-            return self.config.transition_band / 2
-        return 0.0
+            return heat_offset + (self.config.transition_band / 2)
+        return cool_offset if abs(cool_offset) > abs(heat_offset) else heat_offset
     def _minimum_auto_gap(self) -> float:
         return max(MIN_HEAT_COOL_SPREAD, self.config.minimum_auto_gap)
     def _append_active_control_reason(self, reason: str) -> None:
