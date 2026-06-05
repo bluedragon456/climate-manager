@@ -4,16 +4,20 @@
     "step": {
       "user": {
         "title": "Set up Climate Manager",
-        "description": "Pick the thermostat and supporting entities the climate manager should use.",
+        "description": "Pick the thermostat, unit behavior, and supporting entities Climate Manager should use.",
         "data": {
           "thermostat_entity": "Thermostat",
           "outdoor_temp_entity": "Outdoor temperature sensor",
+          "temperature_unit_mode": "Temperature unit",
           "sleep_schedule_entity": "Sleep schedule",
           "away_entity": "Away mode boolean",
           "guest_entity": "Guest mode boolean",
           "override_entity": "Manual climate lock boolean",
           "windows_entity": "Window or door open sensor",
           "season_entity": "Season source"
+        },
+        "data_description": {
+          "temperature_unit_mode": "New installs default to the Home Assistant system unit. Existing installs without this setting continue using Fahrenheit until changed."
         }
       }
     }
@@ -22,67 +26,123 @@
     "step": {
       "init": {
         "title": "Climate Manager options",
-        "description": "Tune your comfort targets, comfort curve, override behavior, and safety limits.",
+        "menu_options": {
+          "simple_comfort": "Simple comfort",
+          "transition_boost": "Transition Auto and outdoor boost",
+          "safety_limits": "Safety, away, and limits",
+          "manual_windows": "Manual override and windows",
+          "comfort_curve": "Advanced comfort curve",
+          "legacy": "Legacy explicit Heat/Cool tuning",
+          "diagnostics": "Diagnostics",
+          "temperature_units": "Temperature units"
+        }
+      },
+      "simple_comfort": {
+        "title": "Simple comfort",
+        "description": "Normal comfort-centered Auto settings for most users.",
         "data": {
           "smart_control_enabled": "Smart control enabled",
           "hvac_preference": "HVAC preference",
-          "heat_home": "Home heat target",
-          "heat_sleep": "Sleep heat target",
-          "heat_guest": "Guest heat target",
-          "heat_away": "Away heat target",
-          "cool_home": "Home cool target",
-          "cool_sleep": "Sleep cool target",
-          "cool_guest": "Guest cool target",
-          "cool_away": "Away cool target",
-          "curve_band_1_max": "Curve band 1 max outdoor temp",
-          "curve_band_1_offset": "Curve band 1 offset",
-          "curve_band_2_max": "Curve band 2 max outdoor temp",
-          "curve_band_2_offset": "Curve band 2 offset",
-          "curve_band_3_max": "Curve band 3 max outdoor temp",
-          "curve_band_3_offset": "Curve band 3 offset",
-          "curve_band_4_max": "Curve band 4 max outdoor temp",
-          "curve_band_4_offset": "Curve band 4 offset",
-          "curve_weight_home": "Home curve weight",
-          "curve_weight_sleep": "Sleep curve weight",
-          "curve_weight_guest": "Guest curve weight",
-          "curve_weight_away": "Away curve weight",
-          "cool_curve_band_1_min": "Cool curve band 1 min outdoor temp",
-          "cool_curve_band_1_offset": "Cool curve band 1 offset",
-          "cool_curve_band_2_min": "Cool curve band 2 min outdoor temp",
-          "cool_curve_band_2_offset": "Cool curve band 2 offset",
-          "cool_curve_band_3_min": "Cool curve band 3 min outdoor temp",
-          "cool_curve_band_3_offset": "Cool curve band 3 offset",
-          "cool_curve_band_4_min": "Cool curve band 4 min outdoor temp",
-          "cool_curve_band_4_offset": "Cool curve band 4 offset",
-          "cool_curve_weight_home": "Home cool curve weight",
-          "cool_curve_weight_sleep": "Sleep cool curve weight",
-          "cool_curve_weight_guest": "Guest cool curve weight",
-          "cool_curve_weight_away": "Away cool curve weight",
-          "comfort_target": "Comfort target",
+          "comfort_target": "Default comfort target fallback",
           "home_comfort_target": "Home comfort target",
           "sleep_comfort_target": "Sleep comfort target",
-          "guest_comfort_target": "Guest comfort target",
+          "guest_comfort_target": "Guest comfort target"
+        }
+      },
+      "transition_boost": {
+        "title": "Transition Auto and outdoor boost",
+        "description": "Tune transition-season Auto ranges and outdoor hot/cold boost.",
+        "data": {
           "transition_band": "Transition comfort band",
           "minimum_auto_gap": "Minimum Auto heat/cool gap",
           "outdoor_cool_override_temp": "Outdoor hot boost temperature",
           "outdoor_heat_override_temp": "Outdoor cold boost temperature",
-          "outdoor_override_deadband": "Outdoor boost deadband",
+          "outdoor_override_deadband": "Outdoor boost deadband"
+        }
+      },
+      "safety_limits": {
+        "title": "Safety, away, and limits",
+        "description": "Away safety targets and thermostat target bounds.",
+        "data": {
+          "heat_away": "Away heat target",
+          "cool_away": "Away cool target",
+          "min_heat_target": "Minimum heat target",
+          "max_heat_target": "Maximum heat target",
+          "min_cool_target": "Minimum cool target",
+          "max_cool_target": "Maximum cool target"
+        }
+      },
+      "manual_windows": {
+        "title": "Manual override and windows",
+        "description": "Manual-change handling, temporary override behavior, and window/door backoff.",
+        "data": {
           "manual_temp_behavior": "Manual temperature change behavior",
           "manual_mode_behavior": "Manual HVAC mode change behavior",
           "override_duration_minutes": "Override duration in minutes",
           "manual_grace_seconds": "Manual change grace seconds",
-          "windows_open_delay_minutes": "Window or door delay before backoff in minutes",
-          "windows_restore_delay_minutes": "Window or door close buffer in seconds",
-          "windows_action": "Windows action",
-          "min_heat_target": "Minimum heat target",
-          "max_heat_target": "Maximum heat target",
-          "min_cool_target": "Minimum cool target",
-          "max_cool_target": "Maximum cool target",
-          "temp_change_threshold": "Meaningful temperature change threshold",
           "cancel_override_on_away": "Cancel override when away turns on",
           "cancel_override_on_windows": "Cancel override when windows open backoff activates",
           "cancel_override_on_sleep": "Cancel override when sleep turns on",
+          "windows_action": "Windows action",
+          "windows_open_delay_minutes": "Window or door delay before backoff in minutes",
+          "windows_restore_delay_minutes": "Window or door close buffer in seconds"
+        }
+      },
+      "comfort_curve": {
+        "title": "Advanced comfort curve",
+        "description": "Scale the comfort-centered outdoor curve by profile.",
+        "data": {
+          "curve_weight_home": "Home heat curve weight",
+          "curve_weight_sleep": "Sleep heat curve weight",
+          "curve_weight_guest": "Guest heat curve weight",
+          "cool_curve_weight_home": "Home cool curve weight",
+          "cool_curve_weight_sleep": "Sleep cool curve weight",
+          "cool_curve_weight_guest": "Guest cool curve weight"
+        }
+      },
+      "legacy": {
+        "title": "Legacy explicit Heat/Cool tuning",
+        "description": "These settings are preserved for explicit Heat/Cool and legacy profile-style behavior. Comfort-centered Auto uses the comfort target settings first.",
+        "data": {
+          "heat_home": "Legacy home heat target",
+          "heat_sleep": "Legacy sleep heat target",
+          "heat_guest": "Legacy guest heat target",
+          "cool_home": "Legacy home cool target",
+          "cool_sleep": "Legacy sleep cool target",
+          "cool_guest": "Legacy guest cool target",
+          "curve_band_1_max": "Legacy heat curve band 1 max outdoor temp",
+          "curve_band_1_offset": "Legacy heat curve band 1 offset",
+          "curve_band_2_max": "Legacy heat curve band 2 max outdoor temp",
+          "curve_band_2_offset": "Legacy heat curve band 2 offset",
+          "curve_band_3_max": "Legacy heat curve band 3 max outdoor temp",
+          "curve_band_3_offset": "Legacy heat curve band 3 offset",
+          "curve_band_4_max": "Legacy heat curve band 4 max outdoor temp",
+          "curve_band_4_offset": "Legacy heat curve band 4 offset",
+          "curve_weight_away": "Legacy away heat curve weight",
+          "cool_curve_band_1_min": "Legacy cool curve band 1 min outdoor temp",
+          "cool_curve_band_1_offset": "Legacy cool curve band 1 offset",
+          "cool_curve_band_2_min": "Legacy cool curve band 2 min outdoor temp",
+          "cool_curve_band_2_offset": "Legacy cool curve band 2 offset",
+          "cool_curve_band_3_min": "Legacy cool curve band 3 min outdoor temp",
+          "cool_curve_band_3_offset": "Legacy cool curve band 3 offset",
+          "cool_curve_band_4_min": "Legacy cool curve band 4 min outdoor temp",
+          "cool_curve_band_4_offset": "Legacy cool curve band 4 offset",
+          "cool_curve_weight_away": "Legacy away cool curve weight"
+        }
+      },
+      "diagnostics": {
+        "title": "Diagnostics",
+        "description": "Support settings for manual-change detection.",
+        "data": {
+          "temp_change_threshold": "Meaningful temperature change threshold",
           "debug_manual_detection": "Manual detection diagnostics"
+        }
+      },
+      "temperature_units": {
+        "title": "Temperature units",
+        "description": "Choose how temperatures are displayed and interpreted at Home Assistant boundaries.",
+        "data": {
+          "temperature_unit_mode": "Temperature unit"
         }
       }
     }
@@ -108,6 +168,13 @@
         "off": "Turn HVAC off",
         "heat_setback": "Heat setback",
         "cool_setback": "Cool setback"
+      }
+    },
+    "temperature_unit_mode": {
+      "options": {
+        "system": "Use Home Assistant system unit",
+        "fahrenheit": "Fahrenheit",
+        "celsius": "Celsius"
       }
     }
   },

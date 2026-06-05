@@ -41,7 +41,20 @@ from .const import (
     WINDOWS_FREEZE_PROTECTION_HEAT_TARGET,
     WINDOWS_FREEZE_PROTECTION_OUTDOOR_TEMP,
 )
-from .helpers import clamp, curve_weight_for_profile, nearly_equal, now, state_float, state_is_on, state_text
+from .helpers import (
+    clamp,
+    curve_weight_for_profile,
+    from_ha_temp,
+    nearly_equal,
+    now,
+    resolve_temperature_unit,
+    round_temperature_for_unit,
+    round_to_half,
+    state_float,
+    state_is_on,
+    state_text,
+    to_ha_temp,
+)
 from .models import ManagerConfig, RuntimeState, ThermostatSnapshot
 from .restore import RuntimeStore
 _LOGGER = logging.getLogger(__name__)
@@ -77,6 +90,10 @@ class ClimateManager:
         self._last_command_snapshot: dict[str, float | str | None] | None = None
         self._last_command_time: Any = None
         self._active_manual_override_snapshot: dict[str, float | str | None] | None = None
+    @property
+    def temperature_unit(self) -> str:
+        """Return the HA-facing temperature unit for this manager."""
+        return resolve_temperature_unit(self.hass, self.config.temperature_unit_mode)
     def _log_manual_diagnostics(self, message: str, *args: Any) -> None:
         if self.config.debug_manual_detection:
             _LOGGER.info(message, *args)
@@ -403,14 +420,14 @@ class ClimateManager:
             return self.config.guest_comfort_target
         return self.config.home_comfort_target
     def _resolve_comfort_curve_offsets(self, profile: str, comfort: float) -> tuple[float, float]:
-        outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
+        outdoor = self._outdoor_temperature_f()
         if outdoor is None:
             return 0.0, 0.0
         if outdoor < comfort:
-            heat_offset = round(((comfort - outdoor) / 3.0) * 0.5 * curve_weight_for_profile(self.config, profile), 1)
+            heat_offset = round_to_half(((comfort - outdoor) / 5.0) * 0.5 * curve_weight_for_profile(self.config, profile))
             return heat_offset, 0.0
         if outdoor > comfort:
-            cool_offset = round(-((outdoor - comfort) / 3.0) * 0.5 * curve_weight_for_profile(self.config, profile, cooling=True), 1)
+            cool_offset = round_to_half(-((outdoor - comfort) / 5.0) * 0.5 * curve_weight_for_profile(self.config, profile, cooling=True))
             return 0.0, cool_offset
         return 0.0, 0.0
     def _comfort_transition_range(
@@ -422,11 +439,13 @@ class ClimateManager:
     ) -> tuple[float, float]:
         minimum_gap = self._minimum_auto_gap()
         if boost == OUTDOOR_BOOST_HOT:
-            target_cool = comfort + cool_offset
+            target_cool = comfort
             target_heat = target_cool - minimum_gap
+            self._append_active_control_reason("boost_capped_at_comfort")
         elif boost == OUTDOOR_BOOST_COLD:
-            target_heat = comfort + heat_offset
+            target_heat = comfort
             target_cool = target_heat + minimum_gap
+            self._append_active_control_reason("boost_capped_at_comfort")
         else:
             band = max(self.config.transition_band, minimum_gap)
             half_band = band / 2
@@ -447,7 +466,7 @@ class ClimateManager:
         if reason not in parts:
             self.runtime.active_control_reason = f"{current}:{reason}"
     def _resolve_outdoor_boost_state(self) -> str:
-        outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
+        outdoor = self._outdoor_temperature_f()
         if outdoor is None:
             self.runtime.outdoor_boost_state = OUTDOOR_BOOST_NONE
             return OUTDOOR_BOOST_NONE
@@ -473,7 +492,7 @@ class ClimateManager:
         return f"auto_{base}"
     def _should_use_freeze_protection(self) -> bool:
         season = self._current_season()
-        outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
+        outdoor = self._outdoor_temperature_f()
         return season == SEASON_WINTER and outdoor is not None and outdoor <= WINDOWS_FREEZE_PROTECTION_OUTDOOR_TEMP
     def _current_season(self) -> str:
         season = (state_text(self.hass, self.config.season_entity) or "").strip().lower()
@@ -502,7 +521,7 @@ class ClimateManager:
             base_cool += cool_delta
         return base_heat, base_cool
     def _resolve_heat_curve_offset(self, profile: str) -> float:
-        outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
+        outdoor = self._outdoor_temperature_f()
         if outdoor is None:
             return 0.0
         if outdoor <= self.config.curve_band_1_max:
@@ -515,7 +534,7 @@ class ClimateManager:
             band_offset = self.config.curve_band_4_offset
         else:
             band_offset = 0.0
-        weighted = round(band_offset * curve_weight_for_profile(self.config, profile), 1)
+        weighted = round_to_half(band_offset * curve_weight_for_profile(self.config, profile))
         _LOGGER.debug(
             "Outdoor temp %s selected heat curve offset %s weighted to %s for profile %s",
             outdoor,
@@ -525,7 +544,7 @@ class ClimateManager:
         )
         return weighted
     def _resolve_cool_curve_offset(self, profile: str) -> float:
-        outdoor = state_float(self.hass, self.config.outdoor_temp_entity)
+        outdoor = self._outdoor_temperature_f()
         if outdoor is None:
             return 0.0
         if outdoor >= self.config.cool_curve_band_4_min:
@@ -538,7 +557,7 @@ class ClimateManager:
             band_offset = self.config.cool_curve_band_1_offset
         else:
             band_offset = 0.0
-        weighted = round(band_offset * curve_weight_for_profile(self.config, profile, cooling=True), 1)
+        weighted = round_to_half(band_offset * curve_weight_for_profile(self.config, profile, cooling=True))
         _LOGGER.debug(
             "Outdoor temp %s selected cool curve offset %s weighted to %s for profile %s",
             outdoor,
@@ -560,6 +579,8 @@ class ClimateManager:
         if desired_mode == "heat_cool":
             return cool_offset if abs(cool_offset) > abs(heat_offset) else heat_offset
         return 0.0
+    def _outdoor_temperature_f(self) -> float | None:
+        return from_ha_temp(state_float(self.hass, self.config.outdoor_temp_entity), self.temperature_unit)
     @property
     def current_set_temperature(self) -> float | None:
         """Return the active managed set temperature shown to the user."""
@@ -599,7 +620,7 @@ class ClimateManager:
             if value is None:
                 return None
             try:
-                return float(value)
+                return from_ha_temp(float(value), self.temperature_unit)
             except (TypeError, ValueError):
                 return None
         return ThermostatSnapshot(
@@ -1041,10 +1062,11 @@ class ClimateManager:
                 blocking=True,
             )
         if target_temp is not None:
+            service_temp = round_temperature_for_unit(to_ha_temp(target_temp, self.temperature_unit), self.temperature_unit)
             await self.hass.services.async_call(
                 "climate",
                 "set_temperature",
-                {ATTR_ENTITY_ID: self.config.thermostat_entity, "temperature": target_temp},
+                {ATTR_ENTITY_ID: self.config.thermostat_entity, "temperature": service_temp},
                 blocking=True,
             )
         await self.async_recalculate("set_temporary_override")
@@ -1140,11 +1162,11 @@ class ClimateManager:
             )
         data: dict[str, Any] = {ATTR_ENTITY_ID: self.config.thermostat_entity}
         if temperature is not None:
-            data["temperature"] = temperature
+            data["temperature"] = round_temperature_for_unit(to_ha_temp(temperature, self.temperature_unit), self.temperature_unit)
         if target_temp_low is not None:
-            data["target_temp_low"] = target_temp_low
+            data["target_temp_low"] = round_temperature_for_unit(to_ha_temp(target_temp_low, self.temperature_unit), self.temperature_unit)
         if target_temp_high is not None:
-            data["target_temp_high"] = target_temp_high
+            data["target_temp_high"] = round_temperature_for_unit(to_ha_temp(target_temp_high, self.temperature_unit), self.temperature_unit)
         self.last_action = f"set_temperature:{data}"
         _LOGGER.debug("Applying temperature payload %s to %s", data, self.config.thermostat_entity)
         await self.hass.services.async_call("climate", "set_temperature", data, blocking=True)

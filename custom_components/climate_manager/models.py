@@ -15,6 +15,7 @@ class ManagerConfig:
     override_entity: str | None = None
     windows_entity: str | None = None
     season_entity: str | None = None
+    temperature_unit_mode: str = "fahrenheit"
     smart_control_enabled: bool = True
     hvac_preference: str = "auto"
     heat_home: float = 69.0
@@ -25,11 +26,11 @@ class ManagerConfig:
     cool_sleep: float = 72.0
     cool_guest: float = 73.0
     cool_away: float = 78.0
-    curve_band_1_max: float = 49.9
+    curve_band_1_max: float = 49.5
     curve_band_1_offset: float = 3.0
-    curve_band_2_max: float = 54.9
+    curve_band_2_max: float = 54.5
     curve_band_2_offset: float = 2.0
-    curve_band_3_max: float = 64.9
+    curve_band_3_max: float = 64.5
     curve_band_3_offset: float = 1.0
     curve_band_4_max: float = 75.0
     curve_band_4_offset: float = 0.0
@@ -37,7 +38,7 @@ class ManagerConfig:
     curve_weight_sleep: float = 0.5
     curve_weight_guest: float = 1.0
     curve_weight_away: float = 0.0
-    cool_curve_band_1_min: float = 75.1
+    cool_curve_band_1_min: float = 75.5
     cool_curve_band_1_offset: float = -1.0
     cool_curve_band_2_min: float = 85.0
     cool_curve_band_2_offset: float = -2.0
