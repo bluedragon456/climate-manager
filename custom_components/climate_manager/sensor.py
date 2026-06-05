@@ -12,18 +12,14 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import DATA_MANAGER, DOMAIN
 from .entity import ClimateManagerEntity
+from .helpers import round_temperature_for_unit, to_ha_temp, to_ha_temp_delta
 from .manager import ClimateManager
 
 
 @dataclass(frozen=True, kw_only=True)
 class ClimateManagerSensorDescription(SensorEntityDescription):
     value_fn: Any
-
-
-def _temperature_or_zero(value: float | None) -> float:
-    if value is None:
-        return 0.0
-    return value
+    temperature_kind: str | None = None
 
 
 def _humanize_token(value: str) -> str:
@@ -85,28 +81,68 @@ SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
         translation_key="current_set_temp",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
-        value_fn=lambda manager: _temperature_or_zero(manager.current_set_temperature),
+        temperature_kind="absolute",
+        value_fn=lambda manager: manager.current_set_temperature,
     ),
     ClimateManagerSensorDescription(
         key="target_heat",
         translation_key="target_heat",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
-        value_fn=lambda manager: _temperature_or_zero(manager.runtime.target_heat),
+        temperature_kind="absolute",
+        value_fn=lambda manager: manager.runtime.target_heat,
     ),
     ClimateManagerSensorDescription(
         key="target_cool",
         translation_key="target_cool",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
-        value_fn=lambda manager: _temperature_or_zero(manager.runtime.target_cool),
+        temperature_kind="absolute",
+        value_fn=lambda manager: manager.runtime.target_cool,
     ),
     ClimateManagerSensorDescription(
         key="comfort_offset",
         translation_key="comfort_offset",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        temperature_kind="delta",
         value_fn=lambda manager: manager.runtime.comfort_offset,
+    ),
+    ClimateManagerSensorDescription(
+        key="comfort_target",
+        translation_key="comfort_target",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        temperature_kind="absolute",
+        value_fn=lambda manager: manager.runtime.active_comfort_target
+        if manager.runtime.active_comfort_target is not None
+        else manager.config.comfort_target,
+    ),
+    ClimateManagerSensorDescription(
+        key="transition_heat_target",
+        translation_key="transition_heat_target",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        temperature_kind="absolute",
+        value_fn=lambda manager: manager.runtime.transition_heat_target,
+    ),
+    ClimateManagerSensorDescription(
+        key="transition_cool_target",
+        translation_key="transition_cool_target",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        temperature_kind="absolute",
+        value_fn=lambda manager: manager.runtime.transition_cool_target,
+    ),
+    ClimateManagerSensorDescription(
+        key="outdoor_boost_state",
+        translation_key="outdoor_boost_state",
+        value_fn=lambda manager: manager.runtime.outdoor_boost_state,
+    ),
+    ClimateManagerSensorDescription(
+        key="active_control_reason",
+        translation_key="active_control_reason",
+        value_fn=lambda manager: manager.runtime.active_control_reason,
     ),
     ClimateManagerSensorDescription(
         key="status",
@@ -162,8 +198,20 @@ class ClimateManagerSensor(ClimateManagerEntity, SensorEntity):
         self._attr_unique_id = f"{entry_id}_{description.key}"
 
     @property
+    def native_unit_of_measurement(self):
+        if self.entity_description.temperature_kind is not None:
+            return self._manager.temperature_unit
+        return self.entity_description.native_unit_of_measurement
+
+    @property
     def native_value(self):
-        return self.entity_description.value_fn(self._manager)
+        value = self.entity_description.value_fn(self._manager)
+        unit = self._manager.temperature_unit
+        if self.entity_description.temperature_kind == "absolute":
+            return round_temperature_for_unit(to_ha_temp(value, unit), unit)
+        if self.entity_description.temperature_kind == "delta":
+            return round_temperature_for_unit(to_ha_temp_delta(value, unit), unit)
+        return value
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:

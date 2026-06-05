@@ -1,6 +1,7 @@
 """Config flow for Climate Manager."""
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 import voluptuous as vol
@@ -9,6 +10,15 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import *  # noqa: F403,F401
+from .helpers import (
+    from_ha_temp,
+    from_ha_temp_delta,
+    resolve_temperature_unit,
+    round_temperature_for_unit,
+    round_to_half,
+    to_ha_temp,
+    to_ha_temp_delta,
+)
 
 HVAC_PREFERENCE_OPTIONS = [HVAC_PREF_AUTO, HVAC_PREF_HEAT, HVAC_PREF_COOL, HVAC_PREF_OFF]
 MANUAL_BEHAVIOR_OPTIONS = [
@@ -22,13 +32,149 @@ WINDOWS_ACTION_OPTIONS = [
     WINDOWS_ACTION_COOL_SETBACK,
 ]
 
+OPTIONS_MENU = [
+    "simple_comfort",
+    "transition_boost",
+    "safety_limits",
+    "manual_windows",
+    "comfort_curve",
+    "legacy",
+    "diagnostics",
+    "temperature_units",
+]
 
-def _normalize_options(defaults: dict[str, Any] | None = None) -> dict[str, Any]:
+SIMPLE_COMFORT_KEYS = (
+    CONF_SMART_CONTROL_ENABLED,
+    CONF_HVAC_PREFERENCE,
+    CONF_COMFORT_TARGET,
+    CONF_HOME_COMFORT_TARGET_OVERRIDE,
+    CONF_HOME_COMFORT_TARGET,
+    CONF_SLEEP_COMFORT_TARGET_OVERRIDE,
+    CONF_SLEEP_COMFORT_TARGET,
+    CONF_GUEST_COMFORT_TARGET_OVERRIDE,
+    CONF_GUEST_COMFORT_TARGET,
+)
+TRANSITION_BOOST_KEYS = (
+    CONF_TRANSITION_BAND,
+    CONF_MINIMUM_AUTO_GAP,
+    CONF_OUTDOOR_COOL_OVERRIDE_TEMP,
+    CONF_OUTDOOR_HEAT_OVERRIDE_TEMP,
+    CONF_OUTDOOR_OVERRIDE_DEADBAND,
+)
+SAFETY_LIMIT_KEYS = (
+    CONF_HEAT_AWAY,
+    CONF_COOL_AWAY,
+    CONF_MIN_HEAT_TARGET,
+    CONF_MAX_HEAT_TARGET,
+    CONF_MIN_COOL_TARGET,
+    CONF_MAX_COOL_TARGET,
+)
+MANUAL_WINDOWS_KEYS = (
+    CONF_MANUAL_TEMP_BEHAVIOR,
+    CONF_MANUAL_MODE_BEHAVIOR,
+    CONF_OVERRIDE_DURATION_MINUTES,
+    CONF_MANUAL_GRACE_SECONDS,
+    CONF_CANCEL_OVERRIDE_ON_AWAY,
+    CONF_CANCEL_OVERRIDE_ON_WINDOWS,
+    CONF_CANCEL_OVERRIDE_ON_SLEEP,
+    CONF_WINDOWS_ACTION,
+    CONF_WINDOWS_OPEN_DELAY_MINUTES,
+    CONF_WINDOWS_RESTORE_DELAY_MINUTES,
+)
+COMFORT_CURVE_KEYS = (
+    CONF_CURVE_WEIGHT_HOME,
+    CONF_CURVE_WEIGHT_SLEEP,
+    CONF_CURVE_WEIGHT_GUEST,
+    CONF_COOL_CURVE_WEIGHT_HOME,
+    CONF_COOL_CURVE_WEIGHT_SLEEP,
+    CONF_COOL_CURVE_WEIGHT_GUEST,
+)
+LEGACY_KEYS = (
+    CONF_HEAT_HOME,
+    CONF_HEAT_SLEEP,
+    CONF_HEAT_GUEST,
+    CONF_COOL_HOME,
+    CONF_COOL_SLEEP,
+    CONF_COOL_GUEST,
+    CONF_CURVE_BAND_1_MAX,
+    CONF_CURVE_BAND_1_OFFSET,
+    CONF_CURVE_BAND_2_MAX,
+    CONF_CURVE_BAND_2_OFFSET,
+    CONF_CURVE_BAND_3_MAX,
+    CONF_CURVE_BAND_3_OFFSET,
+    CONF_CURVE_BAND_4_MAX,
+    CONF_CURVE_BAND_4_OFFSET,
+    CONF_CURVE_WEIGHT_AWAY,
+    CONF_COOL_CURVE_BAND_1_MIN,
+    CONF_COOL_CURVE_BAND_1_OFFSET,
+    CONF_COOL_CURVE_BAND_2_MIN,
+    CONF_COOL_CURVE_BAND_2_OFFSET,
+    CONF_COOL_CURVE_BAND_3_MIN,
+    CONF_COOL_CURVE_BAND_3_OFFSET,
+    CONF_COOL_CURVE_BAND_4_MIN,
+    CONF_COOL_CURVE_BAND_4_OFFSET,
+    CONF_COOL_CURVE_WEIGHT_AWAY,
+)
+DIAGNOSTIC_KEYS = (
+    CONF_TEMP_CHANGE_THRESHOLD,
+    CONF_DEBUG_MANUAL_DETECTION,
+)
+
+ABSOLUTE_TEMP_LIMITS = {
+    CONF_HEAT_HOME: (30, 100),
+    CONF_HEAT_SLEEP: (30, 100),
+    CONF_HEAT_GUEST: (30, 100),
+    CONF_HEAT_AWAY: (30, 100),
+    CONF_COOL_HOME: (30, 100),
+    CONF_COOL_SLEEP: (30, 100),
+    CONF_COOL_GUEST: (30, 100),
+    CONF_COOL_AWAY: (30, 100),
+    CONF_CURVE_BAND_1_MAX: (-50, 150),
+    CONF_CURVE_BAND_2_MAX: (-50, 150),
+    CONF_CURVE_BAND_3_MAX: (-50, 150),
+    CONF_CURVE_BAND_4_MAX: (-50, 150),
+    CONF_COOL_CURVE_BAND_1_MIN: (-50, 150),
+    CONF_COOL_CURVE_BAND_2_MIN: (-50, 150),
+    CONF_COOL_CURVE_BAND_3_MIN: (-50, 150),
+    CONF_COOL_CURVE_BAND_4_MIN: (-50, 150),
+    CONF_COMFORT_TARGET: (30, 100),
+    CONF_HOME_COMFORT_TARGET: (30, 100),
+    CONF_SLEEP_COMFORT_TARGET: (30, 100),
+    CONF_GUEST_COMFORT_TARGET: (30, 100),
+    CONF_OUTDOOR_COOL_OVERRIDE_TEMP: (-50, 150),
+    CONF_OUTDOOR_HEAT_OVERRIDE_TEMP: (-50, 150),
+    CONF_MIN_HEAT_TARGET: (30, 100),
+    CONF_MAX_HEAT_TARGET: (30, 100),
+    CONF_MIN_COOL_TARGET: (30, 100),
+    CONF_MAX_COOL_TARGET: (30, 100),
+}
+DELTA_TEMP_LIMITS = {
+    CONF_CURVE_BAND_1_OFFSET: (-20, 20),
+    CONF_CURVE_BAND_2_OFFSET: (-20, 20),
+    CONF_CURVE_BAND_3_OFFSET: (-20, 20),
+    CONF_CURVE_BAND_4_OFFSET: (-20, 20),
+    CONF_COOL_CURVE_BAND_1_OFFSET: (-20, 20),
+    CONF_COOL_CURVE_BAND_2_OFFSET: (-20, 20),
+    CONF_COOL_CURVE_BAND_3_OFFSET: (-20, 20),
+    CONF_COOL_CURVE_BAND_4_OFFSET: (-20, 20),
+    CONF_TRANSITION_BAND: (0, 20),
+    CONF_MINIMUM_AUTO_GAP: (0, 20),
+    CONF_OUTDOOR_OVERRIDE_DEADBAND: (0, 20),
+    CONF_TEMP_CHANGE_THRESHOLD: (0, 10),
+}
+
+
+def _normalize_options(
+    defaults: dict[str, Any] | None = None,
+    *,
+    round_temperatures: bool = True,
+) -> dict[str, Any]:
+    source = defaults or {}
     data = dict(DEFAULT_OPTIONS)
     if defaults:
         data.update(defaults)
 
-    return {
+    normalized = {
         CONF_SMART_CONTROL_ENABLED: bool(data.get(CONF_SMART_CONTROL_ENABLED, DEFAULT_SMART_CONTROL_ENABLED)),
         CONF_HVAC_PREFERENCE: str(data.get(CONF_HVAC_PREFERENCE, DEFAULT_HVAC_PREFERENCE)),
         CONF_HEAT_HOME: float(data.get(CONF_HEAT_HOME, DEFAULT_HEAT_HOME)),
@@ -63,6 +209,42 @@ def _normalize_options(defaults: dict[str, Any] | None = None) -> dict[str, Any]
         CONF_COOL_CURVE_WEIGHT_SLEEP: float(data.get(CONF_COOL_CURVE_WEIGHT_SLEEP, DEFAULT_COOL_CURVE_WEIGHT_SLEEP)),
         CONF_COOL_CURVE_WEIGHT_GUEST: float(data.get(CONF_COOL_CURVE_WEIGHT_GUEST, DEFAULT_COOL_CURVE_WEIGHT_GUEST)),
         CONF_COOL_CURVE_WEIGHT_AWAY: float(data.get(CONF_COOL_CURVE_WEIGHT_AWAY, DEFAULT_COOL_CURVE_WEIGHT_AWAY)),
+        CONF_COMFORT_TARGET: float(data.get(CONF_COMFORT_TARGET, DEFAULT_COMFORT_TARGET)),
+        CONF_HOME_COMFORT_TARGET: float(data.get(CONF_HOME_COMFORT_TARGET, DEFAULT_HOME_COMFORT_TARGET)),
+        CONF_SLEEP_COMFORT_TARGET: float(data.get(CONF_SLEEP_COMFORT_TARGET, DEFAULT_SLEEP_COMFORT_TARGET)),
+        CONF_GUEST_COMFORT_TARGET: float(data.get(CONF_GUEST_COMFORT_TARGET, DEFAULT_GUEST_COMFORT_TARGET)),
+        CONF_HOME_COMFORT_TARGET_OVERRIDE: _profile_comfort_override_enabled(
+            source,
+            data,
+            CONF_HOME_COMFORT_TARGET,
+            CONF_HOME_COMFORT_TARGET_OVERRIDE,
+            DEFAULT_HOME_COMFORT_TARGET,
+        ),
+        CONF_SLEEP_COMFORT_TARGET_OVERRIDE: _profile_comfort_override_enabled(
+            source,
+            data,
+            CONF_SLEEP_COMFORT_TARGET,
+            CONF_SLEEP_COMFORT_TARGET_OVERRIDE,
+            DEFAULT_SLEEP_COMFORT_TARGET,
+        ),
+        CONF_GUEST_COMFORT_TARGET_OVERRIDE: _profile_comfort_override_enabled(
+            source,
+            data,
+            CONF_GUEST_COMFORT_TARGET,
+            CONF_GUEST_COMFORT_TARGET_OVERRIDE,
+            DEFAULT_GUEST_COMFORT_TARGET,
+        ),
+        CONF_TRANSITION_BAND: float(data.get(CONF_TRANSITION_BAND, DEFAULT_TRANSITION_BAND)),
+        CONF_MINIMUM_AUTO_GAP: float(data.get(CONF_MINIMUM_AUTO_GAP, DEFAULT_MINIMUM_AUTO_GAP)),
+        CONF_OUTDOOR_COOL_OVERRIDE_TEMP: float(
+            data.get(CONF_OUTDOOR_COOL_OVERRIDE_TEMP, DEFAULT_OUTDOOR_COOL_OVERRIDE_TEMP)
+        ),
+        CONF_OUTDOOR_HEAT_OVERRIDE_TEMP: float(
+            data.get(CONF_OUTDOOR_HEAT_OVERRIDE_TEMP, DEFAULT_OUTDOOR_HEAT_OVERRIDE_TEMP)
+        ),
+        CONF_OUTDOOR_OVERRIDE_DEADBAND: float(
+            data.get(CONF_OUTDOOR_OVERRIDE_DEADBAND, DEFAULT_OUTDOOR_OVERRIDE_DEADBAND)
+        ),
         CONF_MANUAL_TEMP_BEHAVIOR: str(data.get(CONF_MANUAL_TEMP_BEHAVIOR, MANUAL_BEHAVIOR_TEMPORARY)),
         CONF_MANUAL_MODE_BEHAVIOR: str(data.get(CONF_MANUAL_MODE_BEHAVIOR, MANUAL_BEHAVIOR_TEMPORARY)),
         CONF_OVERRIDE_DURATION_MINUTES: int(data.get(CONF_OVERRIDE_DURATION_MINUTES, DEFAULT_OVERRIDE_DURATION_MINUTES)),
@@ -80,9 +262,41 @@ def _normalize_options(defaults: dict[str, Any] | None = None) -> dict[str, Any]
         CONF_CANCEL_OVERRIDE_ON_SLEEP: bool(data.get(CONF_CANCEL_OVERRIDE_ON_SLEEP, DEFAULT_CANCEL_OVERRIDE_ON_SLEEP)),
         CONF_DEBUG_MANUAL_DETECTION: bool(data.get(CONF_DEBUG_MANUAL_DETECTION, DEFAULT_DEBUG_MANUAL_DETECTION)),
     }
+    if round_temperatures:
+        for key in TEMPERATURE_OPTION_KEYS:
+            normalized[key] = round_to_half(float(normalized[key]))
+    return normalized
 
 
-def _float_box(default: float, *, min_value: float, max_value: float, step: float = 0.5):
+def _profile_comfort_override_enabled(
+    source: dict[str, Any],
+    data: dict[str, Any],
+    value_key: str,
+    override_key: str,
+    default_value: float,
+) -> bool:
+    if override_key in source:
+        return bool(data.get(override_key))
+    if value_key not in source:
+        return False
+    try:
+        return round_to_half(float(data[value_key])) != default_value
+    except (TypeError, ValueError):
+        return False
+
+
+def _temperature_unit_mode(data: dict[str, Any]) -> str:
+    mode = str(data.get(CONF_TEMPERATURE_UNIT_MODE, DEFAULT_EXISTING_TEMPERATURE_UNIT_MODE))
+    if mode in TEMPERATURE_UNIT_MODES:
+        return mode
+    return DEFAULT_EXISTING_TEMPERATURE_UNIT_MODE
+
+
+def _storage_should_round(unit: str) -> bool:
+    return unit == DEFAULT_TEMPERATURE_UNIT
+
+
+def _float_box(*, min_value: float, max_value: float, step: float = 0.5):
     return selector.NumberSelector(
         selector.NumberSelectorConfig(
             min=min_value,
@@ -93,7 +307,7 @@ def _float_box(default: float, *, min_value: float, max_value: float, step: floa
     )
 
 
-def _int_box(default: int, *, min_value: int, max_value: int):
+def _int_box(*, min_value: int, max_value: int):
     return selector.NumberSelector(
         selector.NumberSelectorConfig(
             min=min_value,
@@ -104,69 +318,96 @@ def _int_box(default: int, *, min_value: int, max_value: int):
     )
 
 
-def _build_options_schema(defaults: dict[str, Any]) -> vol.Schema:
-    defaults = _normalize_options(defaults)
+def _select_box(options: list[str], translation_key: str):
+    return selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=options,
+            mode=selector.SelectSelectorMode.DROPDOWN,
+            translation_key=translation_key,
+        )
+    )
 
+
+def _display_number(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return round(float(value), 1)
+
+
+def _options_to_display(options: dict[str, Any], unit: str) -> dict[str, Any]:
+    display = dict(options)
+    for key in ABSOLUTE_TEMPERATURE_OPTION_KEYS:
+        display[key] = _display_number(round_temperature_for_unit(to_ha_temp(options[key], unit), unit))
+    for key in DELTA_TEMPERATURE_OPTION_KEYS:
+        display[key] = _display_number(round_temperature_for_unit(to_ha_temp_delta(options[key], unit), unit))
+    return display
+
+
+def _options_to_storage(user_input: dict[str, Any], unit: str) -> dict[str, Any]:
+    converted = dict(user_input)
+    for key in ABSOLUTE_TEMPERATURE_OPTION_KEYS:
+        if key in converted:
+            converted[key] = from_ha_temp(float(converted[key]), unit)
+    for key in DELTA_TEMPERATURE_OPTION_KEYS:
+        if key in converted:
+            converted[key] = from_ha_temp_delta(float(converted[key]), unit)
+    return converted
+
+
+def _absolute_box(key: str, unit: str):
+    min_f, max_f = ABSOLUTE_TEMP_LIMITS[key]
+    min_value = _display_number(to_ha_temp(min_f, unit))
+    max_value = _display_number(to_ha_temp(max_f, unit))
+    return _float_box(min_value=min_value, max_value=max_value)
+
+
+def _delta_box(key: str, unit: str):
+    min_f, max_f = DELTA_TEMP_LIMITS[key]
+    min_value = _display_number(to_ha_temp_delta(min_f, unit))
+    max_value = _display_number(to_ha_temp_delta(max_f, unit))
+    return _float_box(min_value=min_value, max_value=max_value)
+
+
+def _field_selector(key: str, unit: str):
+    if key == CONF_SMART_CONTROL_ENABLED:
+        return selector.BooleanSelector()
+    if key == CONF_HVAC_PREFERENCE:
+        return _select_box(HVAC_PREFERENCE_OPTIONS, "hvac_preference")
+    if key in {CONF_MANUAL_TEMP_BEHAVIOR, CONF_MANUAL_MODE_BEHAVIOR}:
+        return _select_box(MANUAL_BEHAVIOR_OPTIONS, "manual_behavior")
+    if key == CONF_WINDOWS_ACTION:
+        return _select_box(WINDOWS_ACTION_OPTIONS, "windows_action")
+    if key in {
+        CONF_CANCEL_OVERRIDE_ON_AWAY,
+        CONF_CANCEL_OVERRIDE_ON_WINDOWS,
+        CONF_CANCEL_OVERRIDE_ON_SLEEP,
+        CONF_DEBUG_MANUAL_DETECTION,
+        CONF_HOME_COMFORT_TARGET_OVERRIDE,
+        CONF_SLEEP_COMFORT_TARGET_OVERRIDE,
+        CONF_GUEST_COMFORT_TARGET_OVERRIDE,
+    }:
+        return selector.BooleanSelector()
+    if key in {
+        CONF_OVERRIDE_DURATION_MINUTES,
+        CONF_WINDOWS_OPEN_DELAY_MINUTES,
+        CONF_WINDOWS_RESTORE_DELAY_MINUTES,
+    }:
+        return _int_box(min_value=1 if key == CONF_OVERRIDE_DURATION_MINUTES else 0, max_value=1440)
+    if key == CONF_MANUAL_GRACE_SECONDS:
+        return _int_box(min_value=0, max_value=600)
+    if key in ABSOLUTE_TEMPERATURE_OPTION_KEYS:
+        return _absolute_box(key, unit)
+    if key in DELTA_TEMPERATURE_OPTION_KEYS:
+        return _delta_box(key, unit)
+    return _float_box(min_value=0, max_value=5, step=0.1)
+
+
+def _build_options_schema(defaults: dict[str, Any], keys: Iterable[str], unit: str) -> vol.Schema:
+    display_defaults = _options_to_display(defaults, unit)
     return vol.Schema(
         {
-            vol.Required(CONF_SMART_CONTROL_ENABLED, default=defaults[CONF_SMART_CONTROL_ENABLED]): selector.BooleanSelector(),
-            vol.Required(CONF_HVAC_PREFERENCE, default=defaults[CONF_HVAC_PREFERENCE]): selector.SelectSelector(
-                selector.SelectSelectorConfig(options=HVAC_PREFERENCE_OPTIONS, mode=selector.SelectSelectorMode.DROPDOWN)
-            ),
-            vol.Required(CONF_HEAT_HOME, default=defaults[CONF_HEAT_HOME]): _float_box(defaults[CONF_HEAT_HOME], min_value=30, max_value=100),
-            vol.Required(CONF_HEAT_SLEEP, default=defaults[CONF_HEAT_SLEEP]): _float_box(defaults[CONF_HEAT_SLEEP], min_value=30, max_value=100),
-            vol.Required(CONF_HEAT_GUEST, default=defaults[CONF_HEAT_GUEST]): _float_box(defaults[CONF_HEAT_GUEST], min_value=30, max_value=100),
-            vol.Required(CONF_HEAT_AWAY, default=defaults[CONF_HEAT_AWAY]): _float_box(defaults[CONF_HEAT_AWAY], min_value=30, max_value=100),
-            vol.Required(CONF_COOL_HOME, default=defaults[CONF_COOL_HOME]): _float_box(defaults[CONF_COOL_HOME], min_value=30, max_value=100),
-            vol.Required(CONF_COOL_SLEEP, default=defaults[CONF_COOL_SLEEP]): _float_box(defaults[CONF_COOL_SLEEP], min_value=30, max_value=100),
-            vol.Required(CONF_COOL_GUEST, default=defaults[CONF_COOL_GUEST]): _float_box(defaults[CONF_COOL_GUEST], min_value=30, max_value=100),
-            vol.Required(CONF_COOL_AWAY, default=defaults[CONF_COOL_AWAY]): _float_box(defaults[CONF_COOL_AWAY], min_value=30, max_value=100),
-            vol.Required(CONF_CURVE_BAND_1_MAX, default=defaults[CONF_CURVE_BAND_1_MAX]): _float_box(defaults[CONF_CURVE_BAND_1_MAX], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_CURVE_BAND_1_OFFSET, default=defaults[CONF_CURVE_BAND_1_OFFSET]): _float_box(defaults[CONF_CURVE_BAND_1_OFFSET], min_value=-20, max_value=20),
-            vol.Required(CONF_CURVE_BAND_2_MAX, default=defaults[CONF_CURVE_BAND_2_MAX]): _float_box(defaults[CONF_CURVE_BAND_2_MAX], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_CURVE_BAND_2_OFFSET, default=defaults[CONF_CURVE_BAND_2_OFFSET]): _float_box(defaults[CONF_CURVE_BAND_2_OFFSET], min_value=-20, max_value=20),
-            vol.Required(CONF_CURVE_BAND_3_MAX, default=defaults[CONF_CURVE_BAND_3_MAX]): _float_box(defaults[CONF_CURVE_BAND_3_MAX], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_CURVE_BAND_3_OFFSET, default=defaults[CONF_CURVE_BAND_3_OFFSET]): _float_box(defaults[CONF_CURVE_BAND_3_OFFSET], min_value=-20, max_value=20),
-            vol.Required(CONF_CURVE_BAND_4_MAX, default=defaults[CONF_CURVE_BAND_4_MAX]): _float_box(defaults[CONF_CURVE_BAND_4_MAX], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_CURVE_BAND_4_OFFSET, default=defaults[CONF_CURVE_BAND_4_OFFSET]): _float_box(defaults[CONF_CURVE_BAND_4_OFFSET], min_value=-20, max_value=20),
-            vol.Required(CONF_CURVE_WEIGHT_HOME, default=defaults[CONF_CURVE_WEIGHT_HOME]): _float_box(defaults[CONF_CURVE_WEIGHT_HOME], min_value=0, max_value=5, step=0.1),
-            vol.Required(CONF_CURVE_WEIGHT_SLEEP, default=defaults[CONF_CURVE_WEIGHT_SLEEP]): _float_box(defaults[CONF_CURVE_WEIGHT_SLEEP], min_value=0, max_value=5, step=0.1),
-            vol.Required(CONF_CURVE_WEIGHT_GUEST, default=defaults[CONF_CURVE_WEIGHT_GUEST]): _float_box(defaults[CONF_CURVE_WEIGHT_GUEST], min_value=0, max_value=5, step=0.1),
-            vol.Required(CONF_CURVE_WEIGHT_AWAY, default=defaults[CONF_CURVE_WEIGHT_AWAY]): _float_box(defaults[CONF_CURVE_WEIGHT_AWAY], min_value=0, max_value=5, step=0.1),
-            vol.Required(CONF_COOL_CURVE_BAND_1_MIN, default=defaults[CONF_COOL_CURVE_BAND_1_MIN]): _float_box(defaults[CONF_COOL_CURVE_BAND_1_MIN], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_COOL_CURVE_BAND_1_OFFSET, default=defaults[CONF_COOL_CURVE_BAND_1_OFFSET]): _float_box(defaults[CONF_COOL_CURVE_BAND_1_OFFSET], min_value=-20, max_value=20),
-            vol.Required(CONF_COOL_CURVE_BAND_2_MIN, default=defaults[CONF_COOL_CURVE_BAND_2_MIN]): _float_box(defaults[CONF_COOL_CURVE_BAND_2_MIN], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_COOL_CURVE_BAND_2_OFFSET, default=defaults[CONF_COOL_CURVE_BAND_2_OFFSET]): _float_box(defaults[CONF_COOL_CURVE_BAND_2_OFFSET], min_value=-20, max_value=20),
-            vol.Required(CONF_COOL_CURVE_BAND_3_MIN, default=defaults[CONF_COOL_CURVE_BAND_3_MIN]): _float_box(defaults[CONF_COOL_CURVE_BAND_3_MIN], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_COOL_CURVE_BAND_3_OFFSET, default=defaults[CONF_COOL_CURVE_BAND_3_OFFSET]): _float_box(defaults[CONF_COOL_CURVE_BAND_3_OFFSET], min_value=-20, max_value=20),
-            vol.Required(CONF_COOL_CURVE_BAND_4_MIN, default=defaults[CONF_COOL_CURVE_BAND_4_MIN]): _float_box(defaults[CONF_COOL_CURVE_BAND_4_MIN], min_value=-50, max_value=150, step=0.1),
-            vol.Required(CONF_COOL_CURVE_BAND_4_OFFSET, default=defaults[CONF_COOL_CURVE_BAND_4_OFFSET]): _float_box(defaults[CONF_COOL_CURVE_BAND_4_OFFSET], min_value=-20, max_value=20),
-            vol.Required(CONF_COOL_CURVE_WEIGHT_HOME, default=defaults[CONF_COOL_CURVE_WEIGHT_HOME]): _float_box(defaults[CONF_COOL_CURVE_WEIGHT_HOME], min_value=0, max_value=5, step=0.1),
-            vol.Required(CONF_COOL_CURVE_WEIGHT_SLEEP, default=defaults[CONF_COOL_CURVE_WEIGHT_SLEEP]): _float_box(defaults[CONF_COOL_CURVE_WEIGHT_SLEEP], min_value=0, max_value=5, step=0.1),
-            vol.Required(CONF_COOL_CURVE_WEIGHT_GUEST, default=defaults[CONF_COOL_CURVE_WEIGHT_GUEST]): _float_box(defaults[CONF_COOL_CURVE_WEIGHT_GUEST], min_value=0, max_value=5, step=0.1),
-            vol.Required(CONF_COOL_CURVE_WEIGHT_AWAY, default=defaults[CONF_COOL_CURVE_WEIGHT_AWAY]): _float_box(defaults[CONF_COOL_CURVE_WEIGHT_AWAY], min_value=0, max_value=5, step=0.1),
-            vol.Required(CONF_MANUAL_TEMP_BEHAVIOR, default=defaults[CONF_MANUAL_TEMP_BEHAVIOR]): selector.SelectSelector(
-                selector.SelectSelectorConfig(options=MANUAL_BEHAVIOR_OPTIONS, mode=selector.SelectSelectorMode.DROPDOWN)
-            ),
-            vol.Required(CONF_MANUAL_MODE_BEHAVIOR, default=defaults[CONF_MANUAL_MODE_BEHAVIOR]): selector.SelectSelector(
-                selector.SelectSelectorConfig(options=MANUAL_BEHAVIOR_OPTIONS, mode=selector.SelectSelectorMode.DROPDOWN)
-            ),
-            vol.Required(CONF_OVERRIDE_DURATION_MINUTES, default=defaults[CONF_OVERRIDE_DURATION_MINUTES]): _int_box(defaults[CONF_OVERRIDE_DURATION_MINUTES], min_value=1, max_value=1440),
-            vol.Required(CONF_MANUAL_GRACE_SECONDS, default=defaults[CONF_MANUAL_GRACE_SECONDS]): _int_box(defaults[CONF_MANUAL_GRACE_SECONDS], min_value=0, max_value=600),
-            vol.Required(CONF_WINDOWS_OPEN_DELAY_MINUTES, default=defaults[CONF_WINDOWS_OPEN_DELAY_MINUTES]): _int_box(defaults[CONF_WINDOWS_OPEN_DELAY_MINUTES], min_value=0, max_value=1440),
-            vol.Required(CONF_WINDOWS_RESTORE_DELAY_MINUTES, default=defaults[CONF_WINDOWS_RESTORE_DELAY_MINUTES]): _int_box(defaults[CONF_WINDOWS_RESTORE_DELAY_MINUTES], min_value=0, max_value=1440),
-            vol.Required(CONF_WINDOWS_ACTION, default=defaults[CONF_WINDOWS_ACTION]): selector.SelectSelector(
-                selector.SelectSelectorConfig(options=WINDOWS_ACTION_OPTIONS, mode=selector.SelectSelectorMode.DROPDOWN)
-            ),
-            vol.Required(CONF_MIN_HEAT_TARGET, default=defaults[CONF_MIN_HEAT_TARGET]): _float_box(defaults[CONF_MIN_HEAT_TARGET], min_value=30, max_value=100),
-            vol.Required(CONF_MAX_HEAT_TARGET, default=defaults[CONF_MAX_HEAT_TARGET]): _float_box(defaults[CONF_MAX_HEAT_TARGET], min_value=30, max_value=100),
-            vol.Required(CONF_MIN_COOL_TARGET, default=defaults[CONF_MIN_COOL_TARGET]): _float_box(defaults[CONF_MIN_COOL_TARGET], min_value=30, max_value=100),
-            vol.Required(CONF_MAX_COOL_TARGET, default=defaults[CONF_MAX_COOL_TARGET]): _float_box(defaults[CONF_MAX_COOL_TARGET], min_value=30, max_value=100),
-            vol.Required(CONF_TEMP_CHANGE_THRESHOLD, default=defaults[CONF_TEMP_CHANGE_THRESHOLD]): _float_box(defaults[CONF_TEMP_CHANGE_THRESHOLD], min_value=0, max_value=10, step=0.1),
-            vol.Required(CONF_CANCEL_OVERRIDE_ON_AWAY, default=defaults[CONF_CANCEL_OVERRIDE_ON_AWAY]): selector.BooleanSelector(),
-            vol.Required(CONF_CANCEL_OVERRIDE_ON_WINDOWS, default=defaults[CONF_CANCEL_OVERRIDE_ON_WINDOWS]): selector.BooleanSelector(),
-            vol.Required(CONF_CANCEL_OVERRIDE_ON_SLEEP, default=defaults[CONF_CANCEL_OVERRIDE_ON_SLEEP]): selector.BooleanSelector(),
-            vol.Required(CONF_DEBUG_MANUAL_DETECTION, default=defaults[CONF_DEBUG_MANUAL_DETECTION]): selector.BooleanSelector(),
+            vol.Required(key, default=display_defaults[key]): _field_selector(key, unit)
+            for key in keys
         }
     )
 
@@ -197,6 +438,10 @@ class ClimateManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_OUTDOOR_TEMP_ENTITY): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="sensor")
                 ),
+                vol.Required(
+                    CONF_TEMPERATURE_UNIT_MODE,
+                    default=DEFAULT_NEW_TEMPERATURE_UNIT_MODE,
+                ): _select_box(TEMPERATURE_UNIT_MODES, "temperature_unit_mode"),
                 vol.Optional(CONF_SLEEP_SCHEDULE_ENTITY): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="schedule")
                 ),
@@ -226,10 +471,90 @@ class ClimateManagerOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._config_entry = config_entry
 
-    async def async_step_init(self, user_input: dict[str, Any] | None = None):
-        """Manage options."""
-        if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+    def _raw_options(self) -> dict[str, Any]:
+        return {**self._config_entry.data, **self._config_entry.options}
 
-        defaults = _normalize_options({**self._config_entry.data, **self._config_entry.options})
-        return self.async_show_form(step_id="init", data_schema=_build_options_schema(defaults))
+    def _unit_mode(self) -> str:
+        return _temperature_unit_mode(self._raw_options())
+
+    def _unit(self) -> str:
+        return resolve_temperature_unit(self.hass, self._unit_mode())
+
+    def _defaults(self, unit: str) -> dict[str, Any]:
+        return _normalize_options(
+            self._raw_options(),
+            round_temperatures=_storage_should_round(unit),
+        )
+
+    def _save(self, updates: dict[str, Any], unit: str):
+        converted = _options_to_storage(updates, unit)
+        raw = {**self._raw_options(), **converted}
+        normalized = _normalize_options(raw, round_temperatures=_storage_should_round(unit))
+        normalized[CONF_TEMPERATURE_UNIT_MODE] = _temperature_unit_mode(raw)
+        return self.async_create_entry(title="", data=normalized)
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None):
+        """Show options menu."""
+        return self.async_show_menu(step_id="init", menu_options=OPTIONS_MENU)
+
+    async def _async_step_options(
+        self,
+        step_id: str,
+        keys: Iterable[str],
+        user_input: dict[str, Any] | None,
+    ):
+        unit = self._unit()
+        if user_input is not None:
+            return self._save(user_input, unit)
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=_build_options_schema(self._defaults(unit), keys, unit),
+        )
+
+    async def async_step_simple_comfort(self, user_input: dict[str, Any] | None = None):
+        """Manage simple comfort options."""
+        return await self._async_step_options("simple_comfort", SIMPLE_COMFORT_KEYS, user_input)
+
+    async def async_step_transition_boost(self, user_input: dict[str, Any] | None = None):
+        """Manage transition Auto and outdoor boost options."""
+        return await self._async_step_options("transition_boost", TRANSITION_BOOST_KEYS, user_input)
+
+    async def async_step_safety_limits(self, user_input: dict[str, Any] | None = None):
+        """Manage safety and limit options."""
+        return await self._async_step_options("safety_limits", SAFETY_LIMIT_KEYS, user_input)
+
+    async def async_step_manual_windows(self, user_input: dict[str, Any] | None = None):
+        """Manage manual override and window/door options."""
+        return await self._async_step_options("manual_windows", MANUAL_WINDOWS_KEYS, user_input)
+
+    async def async_step_comfort_curve(self, user_input: dict[str, Any] | None = None):
+        """Manage comfort curve weights."""
+        return await self._async_step_options("comfort_curve", COMFORT_CURVE_KEYS, user_input)
+
+    async def async_step_legacy(self, user_input: dict[str, Any] | None = None):
+        """Manage legacy explicit mode tuning."""
+        return await self._async_step_options("legacy", LEGACY_KEYS, user_input)
+
+    async def async_step_diagnostics(self, user_input: dict[str, Any] | None = None):
+        """Manage diagnostics."""
+        return await self._async_step_options("diagnostics", DIAGNOSTIC_KEYS, user_input)
+
+    async def async_step_temperature_units(self, user_input: dict[str, Any] | None = None):
+        """Manage temperature unit options."""
+        current = self._unit_mode()
+        if user_input is not None:
+            raw = {**self._raw_options(), **user_input}
+            unit = resolve_temperature_unit(self.hass, _temperature_unit_mode(raw))
+            normalized = _normalize_options(raw, round_temperatures=_storage_should_round(unit))
+            normalized[CONF_TEMPERATURE_UNIT_MODE] = _temperature_unit_mode(raw)
+            return self.async_create_entry(title="", data=normalized)
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_TEMPERATURE_UNIT_MODE, default=current): _select_box(
+                    TEMPERATURE_UNIT_MODES,
+                    "temperature_unit_mode",
+                ),
+            }
+        )
+        return self.async_show_form(step_id="temperature_units", data_schema=schema)

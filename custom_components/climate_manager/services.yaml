@@ -1,35 +1,38 @@
 recalculate:
   fields:
     entry_id:
-      required: true
+      required: false
       example: abc123
       selector:
         text:
 clear_override:
   fields:
     entry_id:
-      required: true
+      required: false
       selector:
         text:
 pause:
   fields:
     entry_id:
-      required: true
+      required: false
       selector:
         text:
 resume:
   fields:
     entry_id:
-      required: true
+      required: false
       selector:
         text:
 set_temporary_override:
+  description: Start a temporary manual override and optionally set thermostat mode or target.
   fields:
     entry_id:
-      required: true
+      description: Climate Manager config entry ID. Optional when only one instance is loaded.
+      required: false
       selector:
         text:
     duration_minutes:
+      description: How long the temporary override remains active.
       required: false
       default: 120
       selector:
@@ -38,13 +41,15 @@ set_temporary_override:
           max: 1440
           step: 1
     target_temp:
+      description: Target temperature in the integration's resolved unit. Existing installs default to Fahrenheit; new installs default to the Home Assistant system unit unless changed.
       required: false
       selector:
         number:
-          min: 40
-          max: 90
+          min: -50
+          max: 150
           step: 0.5
     hvac_mode:
+      description: Optional thermostat HVAC mode to apply during the override.
       required: false
       selector:
         select:

@@ -10,8 +10,20 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
+    CONF_TEMPERATURE_UNIT_MODE,
+    CONF_GUEST_COMFORT_TARGET,
+    CONF_GUEST_COMFORT_TARGET_OVERRIDE,
+    CONF_HOME_COMFORT_TARGET,
+    CONF_HOME_COMFORT_TARGET_OVERRIDE,
+    CONF_SLEEP_COMFORT_TARGET,
+    CONF_SLEEP_COMFORT_TARGET_OVERRIDE,
     DATA_MANAGER,
+    DEFAULT_EXISTING_TEMPERATURE_UNIT_MODE,
+    DEFAULT_GUEST_COMFORT_TARGET,
+    DEFAULT_HOME_COMFORT_TARGET,
     DEFAULT_OPTIONS,
+    DEFAULT_SLEEP_COMFORT_TARGET,
+    DEFAULT_TEMPERATURE_UNIT,
     DOMAIN,
     PLATFORMS,
     SERVICE_CLEAR_OVERRIDE,
@@ -19,7 +31,10 @@ from .const import (
     SERVICE_RECALCULATE,
     SERVICE_RESUME,
     SERVICE_SET_TEMPORARY_OVERRIDE,
+    TEMPERATURE_OPTION_KEYS,
+    TEMPERATURE_UNIT_MODES,
 )
+from .helpers import from_ha_temp, resolve_temperature_unit, round_to_half
 from .manager import ClimateManager
 from .models import ManagerConfig
 
@@ -39,8 +54,34 @@ SERVICE_TEMPORARY_OVERRIDE_SCHEMA = vol.Schema(
 ENTRY_ID_SCHEMA = vol.Schema({vol.Optional("entry_id"): cv.string})
 
 
-def _build_manager_config(entry: ConfigEntry) -> ManagerConfig:
+def _profile_comfort_override_enabled(
+    stored: dict[str, Any],
+    raw: dict[str, Any],
+    value_key: str,
+    override_key: str,
+    default_value: float,
+) -> bool:
+    """Return whether a profile comfort target should override the global target."""
+    if override_key in stored:
+        return bool(raw.get(override_key))
+    if value_key not in stored:
+        return False
+    try:
+        return round_to_half(float(raw[value_key])) != default_value
+    except (TypeError, ValueError):
+        return False
+
+
+def _build_manager_config(hass: HomeAssistant, entry: ConfigEntry) -> ManagerConfig:
+    stored: dict[str, Any] = {**entry.data, **entry.options}
     raw: dict[str, Any] = {**DEFAULT_OPTIONS, **entry.data, **entry.options}
+    unit_mode = str(raw.get(CONF_TEMPERATURE_UNIT_MODE, DEFAULT_EXISTING_TEMPERATURE_UNIT_MODE))
+    if unit_mode not in TEMPERATURE_UNIT_MODES:
+        unit_mode = DEFAULT_EXISTING_TEMPERATURE_UNIT_MODE
+    unit = resolve_temperature_unit(hass, unit_mode)
+    if unit_mode == DEFAULT_EXISTING_TEMPERATURE_UNIT_MODE or unit == DEFAULT_TEMPERATURE_UNIT:
+        for key in TEMPERATURE_OPTION_KEYS:
+            raw[key] = round_to_half(float(raw[key]))
     return ManagerConfig(
         thermostat_entity=raw["thermostat_entity"],
         outdoor_temp_entity=raw.get("outdoor_temp_entity"),
@@ -50,6 +91,7 @@ def _build_manager_config(entry: ConfigEntry) -> ManagerConfig:
         override_entity=raw.get("override_entity"),
         windows_entity=raw.get("windows_entity"),
         season_entity=raw.get("season_entity"),
+        temperature_unit_mode=unit_mode,
         smart_control_enabled=raw["smart_control_enabled"],
         hvac_preference=raw["hvac_preference"],
         heat_home=raw["heat_home"],
@@ -84,6 +126,36 @@ def _build_manager_config(entry: ConfigEntry) -> ManagerConfig:
         cool_curve_weight_sleep=raw["cool_curve_weight_sleep"],
         cool_curve_weight_guest=raw["cool_curve_weight_guest"],
         cool_curve_weight_away=raw["cool_curve_weight_away"],
+        comfort_target=raw["comfort_target"],
+        home_comfort_target=raw["home_comfort_target"],
+        sleep_comfort_target=raw["sleep_comfort_target"],
+        guest_comfort_target=raw["guest_comfort_target"],
+        home_comfort_target_override=_profile_comfort_override_enabled(
+            stored,
+            raw,
+            CONF_HOME_COMFORT_TARGET,
+            CONF_HOME_COMFORT_TARGET_OVERRIDE,
+            DEFAULT_HOME_COMFORT_TARGET,
+        ),
+        sleep_comfort_target_override=_profile_comfort_override_enabled(
+            stored,
+            raw,
+            CONF_SLEEP_COMFORT_TARGET,
+            CONF_SLEEP_COMFORT_TARGET_OVERRIDE,
+            DEFAULT_SLEEP_COMFORT_TARGET,
+        ),
+        guest_comfort_target_override=_profile_comfort_override_enabled(
+            stored,
+            raw,
+            CONF_GUEST_COMFORT_TARGET,
+            CONF_GUEST_COMFORT_TARGET_OVERRIDE,
+            DEFAULT_GUEST_COMFORT_TARGET,
+        ),
+        transition_band=raw["transition_band"],
+        minimum_auto_gap=raw["minimum_auto_gap"],
+        outdoor_cool_override_temp=raw["outdoor_cool_override_temp"],
+        outdoor_heat_override_temp=raw["outdoor_heat_override_temp"],
+        outdoor_override_deadband=raw["outdoor_override_deadband"],
         manual_temp_behavior=raw["manual_temp_behavior"],
         manual_mode_behavior=raw["manual_mode_behavior"],
         override_duration_minutes=raw["override_duration_minutes"],
@@ -150,9 +222,10 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 
     async def handle_set_temporary_override(call: ServiceCall) -> None:
         if manager := await _get_manager(call):
+            target_temp = from_ha_temp(call.data.get("target_temp"), manager.temperature_unit)
             await manager.async_set_temporary_override(
                 duration_minutes=call.data["duration_minutes"],
-                target_temp=call.data.get("target_temp"),
+                target_temp=target_temp,
                 hvac_mode=call.data.get("hvac_mode"),
             )
 
@@ -177,7 +250,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Climate Manager from a config entry."""
-    manager = ClimateManager(hass, entry.entry_id, _build_manager_config(entry))
+    manager = ClimateManager(hass, entry.entry_id, _build_manager_config(hass, entry))
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {DATA_MANAGER: manager}
     await manager.async_initialize()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
