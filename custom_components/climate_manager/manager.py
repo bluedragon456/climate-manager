@@ -241,6 +241,25 @@ class ClimateManager:
                 self._detect_manual_change(reason, thermostat)
             profile = self._resolve_profile()
             desired_mode = self._resolve_desired_hvac_mode(profile)
+            if self._comfort_auto_outdoor_unavailable(profile, desired_mode):
+                self.runtime.active_profile = profile
+                self.runtime.desired_hvac_mode = desired_mode
+                self.runtime.target_heat = None
+                self.runtime.target_cool = None
+                self.runtime.transition_heat_target = None
+                self.runtime.transition_cool_target = None
+                self.runtime.comfort_offset = 0.0
+                self.runtime.active_comfort_target = (
+                    None if profile == PROFILE_AWAY else self._comfort_target_for_profile(profile)
+                )
+                self.runtime.outdoor_boost_state = OUTDOOR_BOOST_NONE
+                self.runtime.active_control_reason = "outdoor_temperature_unavailable"
+                self.runtime.status = STATUS_UNAVAILABLE
+                self._schedule_window_recalc_if_needed()
+                self._schedule_override_recalc_if_needed()
+                self._schedule_save()
+                self._notify_subscribers()
+                return
             target_heat, target_cool = self._resolve_targets(profile, desired_mode)
             self.runtime.active_profile = profile
             self.runtime.desired_hvac_mode = desired_mode
@@ -337,6 +356,8 @@ class ClimateManager:
             and desired_mode in {HVAC_PREF_HEAT, HVAC_PREF_COOL, "heat_cool"}
             and profile not in {PROFILE_PAUSED, PROFILE_OVERRIDE_LOCK, PROFILE_MANUAL_OVERRIDE, PROFILE_SENSORS_OPEN}
         )
+    def _comfort_auto_outdoor_unavailable(self, profile: str, desired_mode: str | None) -> bool:
+        return self._should_use_comfort_auto_targets(profile, desired_mode) and self._outdoor_temperature_f() is None
     def _resolve_profile_curve_targets(self, profile: str, desired_mode: str | None) -> tuple[float | None, float | None]:
         base_heat = None
         base_cool = None
@@ -414,11 +435,13 @@ class ClimateManager:
             return None, clamp(comfort + cool_offset, self.config.min_cool_target, self.config.max_cool_target)
         return None, None
     def _comfort_target_for_profile(self, profile: str) -> float:
-        if profile == PROFILE_SLEEP:
+        if profile == PROFILE_SLEEP and self.config.sleep_comfort_target_override:
             return self.config.sleep_comfort_target
-        if profile == PROFILE_GUEST:
+        if profile == PROFILE_GUEST and self.config.guest_comfort_target_override:
             return self.config.guest_comfort_target
-        return self.config.home_comfort_target
+        if profile == PROFILE_HOME and self.config.home_comfort_target_override:
+            return self.config.home_comfort_target
+        return self.config.comfort_target
     def _resolve_comfort_curve_offsets(self, profile: str, comfort: float) -> tuple[float, float]:
         outdoor = self._outdoor_temperature_f()
         if outdoor is None:

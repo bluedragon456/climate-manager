@@ -54,6 +54,9 @@ class ManagerConfig:
     home_comfort_target: float = 70.0
     sleep_comfort_target: float = 68.0
     guest_comfort_target: float = 70.0
+    home_comfort_target_override: bool = False
+    sleep_comfort_target_override: bool = False
+    guest_comfort_target_override: bool = False
     transition_band: float = 6.0
     minimum_auto_gap: float = 6.0
     outdoor_cool_override_temp: float = 80.0

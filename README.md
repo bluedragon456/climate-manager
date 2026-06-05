@@ -128,10 +128,8 @@ Use this first for normal comfort-centered Auto control:
 
 - Smart control enabled
 - HVAC preference: `Auto`, `Heat`, `Cool`, or `Off`
-- Default comfort target fallback
-- Home comfort target
-- Sleep comfort target
-- Guest comfort target
+- Default comfort target
+- Custom Home, Sleep, and Guest comfort target toggles and values
 
 ### Transition Auto And Outdoor Boost
 
@@ -228,11 +226,12 @@ Climate Manager resolves the active profile in this order:
 
 ## Profile Comfort Target Behavior
 
-In `Auto`, Climate Manager centers control around the active profile comfort target.
+In `Auto`, Climate Manager centers control around the default comfort target unless a profile-specific comfort target is enabled.
 
-- Home comfort defaults to `70 F`.
-- Sleep comfort defaults to `68 F`.
-- Guest comfort defaults to `70 F`.
+- Default comfort target defaults to `70 F`.
+- Home, Sleep, and Guest can each use a custom comfort target when their custom target option is enabled.
+- If a profile-specific comfort target is missing, unset, or still at its migration default, Climate Manager uses the default comfort target.
+- Changing only `Default comfort target` changes Home, Sleep, and Guest Auto control unless a custom target is enabled for that profile.
 - Away uses the configured away heat/cool targets as a safety range instead of a comfort target.
 - Heating season normally uses `heat` at the active comfort target.
 - Cooling season normally uses `cool` at the active comfort target.
@@ -241,7 +240,7 @@ In `Auto`, Climate Manager centers control around the active profile comfort tar
 
 With the home defaults:
 
-- `Home comfort target`: `70 F`
+- `Default comfort target`: `70 F`
 - `Transition comfort band`: `6 F`
 - `Minimum Auto heat/cool gap`: `6 F`
 
@@ -264,7 +263,7 @@ The active comfort side moves toward the comfort target while the opposite side 
 
 The `Current set temp` sensor reports the active side during hot or cold boost. During normal transition it reports the heat side of the range.
 
-Sleep uses the same math around its default `68 F` comfort target, so normal sleep transition is `65 / 71` before any curve adjustment.
+Sleep and Guest use the same math around the default comfort target unless their custom comfort target options are enabled.
 
 ## Comfort Curve Behavior
 
@@ -282,7 +281,7 @@ Numeric temperature, curve, and threshold options use `0.5` degree steps in the 
 
 ## Outdoor Boost Behavior
 
-Outdoor boost uses the outdoor temperature sensor only when HVAC preference is `Auto`.
+Outdoor boost uses the outdoor temperature sensor only when HVAC preference is `Auto`. Comfort-centered `Auto` treats the outdoor temperature sensor as required; if the configured sensor is missing, `unknown`, `unavailable`, or non-numeric, Climate Manager stops comfort Auto writes and reports `outdoor_temperature_unavailable` through `Active control reason`.
 
 Defaults:
 
@@ -443,6 +442,7 @@ data:
 - If a configured min target is higher than its matching max target, `Active control reason` includes `range_limits_invalid`; fix the option values before relying on Auto control.
 - Profile target and curve options are preserved, but comfort-centered `Auto` supersedes the old season baseline/profile target math.
 - If the thermostat is unavailable, Climate Manager stops applying changes and exposes that through `Fail-safe active` and `Status`.
+- If the outdoor temperature sensor is unavailable or non-numeric, comfort-centered `Auto` stops applying thermostat setpoints and reports `outdoor_temperature_unavailable`. Explicit `Heat`, `Cool`, and `Off` preferences remain available.
 
 ## Troubleshooting
 
@@ -455,6 +455,7 @@ Check:
 - A manual override is not active
 - Override lock is not active
 - Windows backoff is not active
+- `Active control reason` is not `outdoor_temperature_unavailable`
 - The thermostat supports the requested HVAC mode and temperature fields
 
 ### Cooling Is Not Responding To Hotter Outdoor Temperatures

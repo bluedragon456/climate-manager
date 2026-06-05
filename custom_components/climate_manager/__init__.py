@@ -11,9 +11,18 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import (
     CONF_TEMPERATURE_UNIT_MODE,
+    CONF_GUEST_COMFORT_TARGET,
+    CONF_GUEST_COMFORT_TARGET_OVERRIDE,
+    CONF_HOME_COMFORT_TARGET,
+    CONF_HOME_COMFORT_TARGET_OVERRIDE,
+    CONF_SLEEP_COMFORT_TARGET,
+    CONF_SLEEP_COMFORT_TARGET_OVERRIDE,
     DATA_MANAGER,
     DEFAULT_EXISTING_TEMPERATURE_UNIT_MODE,
+    DEFAULT_GUEST_COMFORT_TARGET,
+    DEFAULT_HOME_COMFORT_TARGET,
     DEFAULT_OPTIONS,
+    DEFAULT_SLEEP_COMFORT_TARGET,
     DEFAULT_TEMPERATURE_UNIT,
     DOMAIN,
     PLATFORMS,
@@ -45,7 +54,26 @@ SERVICE_TEMPORARY_OVERRIDE_SCHEMA = vol.Schema(
 ENTRY_ID_SCHEMA = vol.Schema({vol.Optional("entry_id"): cv.string})
 
 
+def _profile_comfort_override_enabled(
+    stored: dict[str, Any],
+    raw: dict[str, Any],
+    value_key: str,
+    override_key: str,
+    default_value: float,
+) -> bool:
+    """Return whether a profile comfort target should override the global target."""
+    if override_key in stored:
+        return bool(raw.get(override_key))
+    if value_key not in stored:
+        return False
+    try:
+        return round_to_half(float(raw[value_key])) != default_value
+    except (TypeError, ValueError):
+        return False
+
+
 def _build_manager_config(hass: HomeAssistant, entry: ConfigEntry) -> ManagerConfig:
+    stored: dict[str, Any] = {**entry.data, **entry.options}
     raw: dict[str, Any] = {**DEFAULT_OPTIONS, **entry.data, **entry.options}
     unit_mode = str(raw.get(CONF_TEMPERATURE_UNIT_MODE, DEFAULT_EXISTING_TEMPERATURE_UNIT_MODE))
     if unit_mode not in TEMPERATURE_UNIT_MODES:
@@ -102,6 +130,27 @@ def _build_manager_config(hass: HomeAssistant, entry: ConfigEntry) -> ManagerCon
         home_comfort_target=raw["home_comfort_target"],
         sleep_comfort_target=raw["sleep_comfort_target"],
         guest_comfort_target=raw["guest_comfort_target"],
+        home_comfort_target_override=_profile_comfort_override_enabled(
+            stored,
+            raw,
+            CONF_HOME_COMFORT_TARGET,
+            CONF_HOME_COMFORT_TARGET_OVERRIDE,
+            DEFAULT_HOME_COMFORT_TARGET,
+        ),
+        sleep_comfort_target_override=_profile_comfort_override_enabled(
+            stored,
+            raw,
+            CONF_SLEEP_COMFORT_TARGET,
+            CONF_SLEEP_COMFORT_TARGET_OVERRIDE,
+            DEFAULT_SLEEP_COMFORT_TARGET,
+        ),
+        guest_comfort_target_override=_profile_comfort_override_enabled(
+            stored,
+            raw,
+            CONF_GUEST_COMFORT_TARGET,
+            CONF_GUEST_COMFORT_TARGET_OVERRIDE,
+            DEFAULT_GUEST_COMFORT_TARGET,
+        ),
         transition_band=raw["transition_band"],
         minimum_auto_gap=raw["minimum_auto_gap"],
         outdoor_cool_override_temp=raw["outdoor_cool_override_temp"],

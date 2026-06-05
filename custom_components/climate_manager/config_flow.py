@@ -47,8 +47,11 @@ SIMPLE_COMFORT_KEYS = (
     CONF_SMART_CONTROL_ENABLED,
     CONF_HVAC_PREFERENCE,
     CONF_COMFORT_TARGET,
+    CONF_HOME_COMFORT_TARGET_OVERRIDE,
     CONF_HOME_COMFORT_TARGET,
+    CONF_SLEEP_COMFORT_TARGET_OVERRIDE,
     CONF_SLEEP_COMFORT_TARGET,
+    CONF_GUEST_COMFORT_TARGET_OVERRIDE,
     CONF_GUEST_COMFORT_TARGET,
 )
 TRANSITION_BOOST_KEYS = (
@@ -166,6 +169,7 @@ def _normalize_options(
     *,
     round_temperatures: bool = True,
 ) -> dict[str, Any]:
+    source = defaults or {}
     data = dict(DEFAULT_OPTIONS)
     if defaults:
         data.update(defaults)
@@ -209,6 +213,27 @@ def _normalize_options(
         CONF_HOME_COMFORT_TARGET: float(data.get(CONF_HOME_COMFORT_TARGET, DEFAULT_HOME_COMFORT_TARGET)),
         CONF_SLEEP_COMFORT_TARGET: float(data.get(CONF_SLEEP_COMFORT_TARGET, DEFAULT_SLEEP_COMFORT_TARGET)),
         CONF_GUEST_COMFORT_TARGET: float(data.get(CONF_GUEST_COMFORT_TARGET, DEFAULT_GUEST_COMFORT_TARGET)),
+        CONF_HOME_COMFORT_TARGET_OVERRIDE: _profile_comfort_override_enabled(
+            source,
+            data,
+            CONF_HOME_COMFORT_TARGET,
+            CONF_HOME_COMFORT_TARGET_OVERRIDE,
+            DEFAULT_HOME_COMFORT_TARGET,
+        ),
+        CONF_SLEEP_COMFORT_TARGET_OVERRIDE: _profile_comfort_override_enabled(
+            source,
+            data,
+            CONF_SLEEP_COMFORT_TARGET,
+            CONF_SLEEP_COMFORT_TARGET_OVERRIDE,
+            DEFAULT_SLEEP_COMFORT_TARGET,
+        ),
+        CONF_GUEST_COMFORT_TARGET_OVERRIDE: _profile_comfort_override_enabled(
+            source,
+            data,
+            CONF_GUEST_COMFORT_TARGET,
+            CONF_GUEST_COMFORT_TARGET_OVERRIDE,
+            DEFAULT_GUEST_COMFORT_TARGET,
+        ),
         CONF_TRANSITION_BAND: float(data.get(CONF_TRANSITION_BAND, DEFAULT_TRANSITION_BAND)),
         CONF_MINIMUM_AUTO_GAP: float(data.get(CONF_MINIMUM_AUTO_GAP, DEFAULT_MINIMUM_AUTO_GAP)),
         CONF_OUTDOOR_COOL_OVERRIDE_TEMP: float(
@@ -241,6 +266,23 @@ def _normalize_options(
         for key in TEMPERATURE_OPTION_KEYS:
             normalized[key] = round_to_half(float(normalized[key]))
     return normalized
+
+
+def _profile_comfort_override_enabled(
+    source: dict[str, Any],
+    data: dict[str, Any],
+    value_key: str,
+    override_key: str,
+    default_value: float,
+) -> bool:
+    if override_key in source:
+        return bool(data.get(override_key))
+    if value_key not in source:
+        return False
+    try:
+        return round_to_half(float(data[value_key])) != default_value
+    except (TypeError, ValueError):
+        return False
 
 
 def _temperature_unit_mode(data: dict[str, Any]) -> str:
@@ -340,6 +382,9 @@ def _field_selector(key: str, unit: str):
         CONF_CANCEL_OVERRIDE_ON_WINDOWS,
         CONF_CANCEL_OVERRIDE_ON_SLEEP,
         CONF_DEBUG_MANUAL_DETECTION,
+        CONF_HOME_COMFORT_TARGET_OVERRIDE,
+        CONF_SLEEP_COMFORT_TARGET_OVERRIDE,
+        CONF_GUEST_COMFORT_TARGET_OVERRIDE,
     }:
         return selector.BooleanSelector()
     if key in {

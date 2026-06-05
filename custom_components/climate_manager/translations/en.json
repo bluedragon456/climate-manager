@@ -43,10 +43,13 @@
         "data": {
           "smart_control_enabled": "Smart control enabled",
           "hvac_preference": "HVAC preference",
-          "comfort_target": "Default comfort target fallback",
-          "home_comfort_target": "Home comfort target",
-          "sleep_comfort_target": "Sleep comfort target",
-          "guest_comfort_target": "Guest comfort target"
+          "comfort_target": "Default comfort target",
+          "home_comfort_target_override": "Use a custom Home comfort target",
+          "home_comfort_target": "Home comfort target when custom target is enabled",
+          "sleep_comfort_target_override": "Use a custom Sleep comfort target",
+          "sleep_comfort_target": "Sleep comfort target when custom target is enabled",
+          "guest_comfort_target_override": "Use a custom Guest comfort target",
+          "guest_comfort_target": "Guest comfort target when custom target is enabled"
         }
       },
       "transition_boost": {
