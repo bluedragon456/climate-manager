@@ -63,6 +63,7 @@ MIN_HEAT_COOL_SPREAD = 5.0
 OUTDOOR_BOOST_NONE = "none"
 OUTDOOR_BOOST_HOT = "hot"
 OUTDOOR_BOOST_COLD = "cold"
+OUTDOOR_BOOST_ADJUSTMENT = 1.0
 SEASONAL_BASELINES: dict[str, tuple[float, float]] = {
     SEASON_WINTER: (69.0, 74.0),
     SEASON_SPRING: (66.0, 71.0),
@@ -417,22 +418,31 @@ class ClimateManager:
                 self.runtime.transition_cool_target = target_cool
                 return target_heat, target_cool
             return None, None
-        comfort = self._comfort_target_for_profile(profile)
-        self.runtime.active_comfort_target = comfort
-        heat_offset, cool_offset = self._resolve_comfort_curve_offsets(profile, comfort)
+        base_comfort = self._comfort_target_for_profile(profile)
+        heat_offset, cool_offset = self._resolve_comfort_curve_offsets(profile, base_comfort)
         boost = self.runtime.outdoor_boost_state
         if desired_mode == "heat_cool":
-            self.runtime.comfort_offset = self._comfort_transition_offset(boost, heat_offset, cool_offset)
-            target_heat, target_cool = self._comfort_transition_range(comfort, boost, heat_offset, cool_offset)
+            raw_offset = self._resolve_active_comfort_offset(desired_mode, heat_offset, cool_offset)
+            raw_offset += self._outdoor_boost_comfort_offset(boost)
+            comfort = self._cap_effective_comfort_target(self._effective_comfort_target(base_comfort, raw_offset))
+            self.runtime.comfort_offset = round_to_half(comfort - base_comfort)
+            self.runtime.active_comfort_target = comfort
+            target_heat, target_cool = self._comfort_transition_range(comfort)
             self.runtime.transition_heat_target = target_heat
             self.runtime.transition_cool_target = target_cool
             return target_heat, target_cool
         if desired_mode == HVAC_PREF_HEAT:
-            self.runtime.comfort_offset = heat_offset
-            return clamp(comfort + heat_offset, self.config.min_heat_target, self.config.max_heat_target), None
+            raw_offset = heat_offset + self._outdoor_boost_comfort_offset(boost)
+            comfort = self._cap_effective_comfort_target(self._effective_comfort_target(base_comfort, raw_offset))
+            self.runtime.comfort_offset = round_to_half(comfort - base_comfort)
+            self.runtime.active_comfort_target = comfort
+            return comfort, None
         if desired_mode == HVAC_PREF_COOL:
-            self.runtime.comfort_offset = cool_offset
-            return None, clamp(comfort + cool_offset, self.config.min_cool_target, self.config.max_cool_target)
+            raw_offset = cool_offset + self._outdoor_boost_comfort_offset(boost)
+            comfort = self._cap_effective_comfort_target(self._effective_comfort_target(base_comfort, raw_offset))
+            self.runtime.comfort_offset = round_to_half(comfort - base_comfort)
+            self.runtime.active_comfort_target = comfort
+            return None, comfort
         return None, None
     def _comfort_target_for_profile(self, profile: str) -> float:
         if profile == PROFILE_SLEEP and self.config.sleep_comfort_target_override:
@@ -453,34 +463,29 @@ class ClimateManager:
             cool_offset = round_to_half(-((outdoor - comfort) / 5.0) * 0.5 * curve_weight_for_profile(self.config, profile, cooling=True))
             return 0.0, cool_offset
         return 0.0, 0.0
+    def _effective_comfort_target(self, base_comfort: float, comfort_offset: float) -> float:
+        return round_to_half(base_comfort + comfort_offset)
+    def _outdoor_boost_comfort_offset(self, boost: str) -> float:
+        if boost == OUTDOOR_BOOST_COLD:
+            return OUTDOOR_BOOST_ADJUSTMENT
+        if boost == OUTDOOR_BOOST_HOT:
+            return -OUTDOOR_BOOST_ADJUSTMENT
+        return 0.0
+    def _cap_effective_comfort_target(self, comfort: float) -> float:
+        if self.config.min_cool_target > self.config.max_heat_target:
+            self._append_active_control_reason("comfort_cap_limits_invalid")
+            return comfort
+        return round_to_half(clamp(comfort, self.config.min_cool_target, self.config.max_heat_target))
     def _comfort_transition_range(
         self,
         comfort: float,
-        boost: str,
-        heat_offset: float,
-        cool_offset: float,
     ) -> tuple[float, float]:
         minimum_gap = self._minimum_auto_gap()
-        if boost == OUTDOOR_BOOST_HOT:
-            target_cool = comfort
-            target_heat = target_cool - minimum_gap
-            self._append_active_control_reason("boost_capped_at_comfort")
-        elif boost == OUTDOOR_BOOST_COLD:
-            target_heat = comfort
-            target_cool = target_heat + minimum_gap
-            self._append_active_control_reason("boost_capped_at_comfort")
-        else:
-            band = max(self.config.transition_band, minimum_gap)
-            half_band = band / 2
-            target_heat = comfort - half_band + heat_offset
-            target_cool = comfort + half_band + cool_offset
+        band = max(self.config.transition_band, minimum_gap)
+        half_band = band / 2
+        target_heat = comfort - half_band
+        target_cool = comfort + half_band
         return self.normalize_heat_cool_range(target_heat, target_cool, update_reason=True)
-    def _comfort_transition_offset(self, boost: str, heat_offset: float, cool_offset: float) -> float:
-        if boost == OUTDOOR_BOOST_HOT:
-            return cool_offset - (self.config.transition_band / 2)
-        if boost == OUTDOOR_BOOST_COLD:
-            return heat_offset + (self.config.transition_band / 2)
-        return cool_offset if abs(cool_offset) > abs(heat_offset) else heat_offset
     def _minimum_auto_gap(self) -> float:
         return max(MIN_HEAT_COOL_SPREAD, self.config.minimum_auto_gap)
     def _append_active_control_reason(self, reason: str) -> None:

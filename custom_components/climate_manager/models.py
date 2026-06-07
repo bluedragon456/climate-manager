@@ -59,7 +59,7 @@ class ManagerConfig:
     guest_comfort_target_override: bool = False
     transition_band: float = 6.0
     minimum_auto_gap: float = 6.0
-    outdoor_cool_override_temp: float = 80.0
+    outdoor_cool_override_temp: float = 95.0
     outdoor_heat_override_temp: float = 55.0
     outdoor_override_deadband: float = 2.0
     manual_temp_behavior: str = "temporary_override"

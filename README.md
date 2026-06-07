@@ -231,6 +231,8 @@ In `Auto`, Climate Manager centers control around the default comfort target unl
 - Default comfort target defaults to `70 F`.
 - Home, Sleep, and Guest can each use a custom comfort target when their custom target option is enabled.
 - If a profile-specific comfort target is missing, unset, or still at its migration default, Climate Manager uses the default comfort target.
+- The `Comfort target` sensor reports the active effective comfort target after the active comfort offset is applied.
+- The `Comfort offset` sensor reports the capped total automatic comfort adjustment from the outdoor curve plus any active outdoor boost.
 - Changing only `Default comfort target` changes Home, Sleep, and Guest Auto control unless a custom target is enabled for that profile.
 - Away uses the configured away heat/cool targets as a safety range instead of a comfort target.
 - Heating season normally uses `heat` at the active comfort target.
@@ -241,6 +243,7 @@ In `Auto`, Climate Manager centers control around the default comfort target unl
 With the home defaults:
 
 - `Default comfort target`: `70 F`
+- `Comfort offset`: `0 F`
 - `Transition comfort band`: `6 F`
 - `Minimum Auto heat/cool gap`: `6 F`
 
@@ -253,13 +256,13 @@ Normal transition Auto is:
 
 Spring, fall, autumn, missing season, and unknown season use transition Auto. Climate Manager keeps the thermostat in `heat_cool` and adjusts the range around the comfort target.
 
-The active comfort side moves toward the comfort target while the opposite side moves enough to preserve the required Auto gap.
+When a comfort offset is active, Climate Manager first calculates the effective comfort target, then builds the transition range around that effective target. The active comfort side moves toward the effective comfort target while the opposite side moves enough to preserve the required Auto gap.
 
 | Situation | Heat target | Cool target |
 | --- | --- | --- |
 | Normal transition | `67 F` | `73 F` |
-| Hot boost | `64 F` | `70 F` |
-| Cold boost | `70 F` | `76 F` |
+| Hot boost at `95 F` outdoor | `65 F` | `71 F` |
+| Cold boost at `55 F` outdoor | `69.5 F` | `75.5 F` |
 
 The `Current set temp` sensor reports the active side during hot or cold boost. During normal transition it reports the heat side of the range.
 
@@ -269,10 +272,13 @@ Sleep and Guest use the same math around the default comfort target unless their
 
 In comfort-centered `Auto`, Climate Manager applies a linear outdoor curve around the active profile comfort target:
 
-- If outdoor temperature is below the active comfort target, the heat side rises by `0.5 F` for every `5 F` of difference.
-- If outdoor temperature is above the active comfort target, the cool side lowers by `0.5 F` for every `5 F` of difference.
+- If outdoor temperature is below the active profile comfort target, the comfort offset increases by `0.5 F` for every `5 F` of difference.
+- If outdoor temperature is above the active profile comfort target, the comfort offset decreases by `0.5 F` for every `5 F` of difference.
+- Cold outdoor boost adds `1.0 F` to the outdoor curve adjustment.
+- Hot outdoor boost subtracts `1.0 F` from the outdoor curve adjustment.
+- The effective comfort target is the active profile comfort target plus the active comfort offset, capped between the configured minimum cool target and maximum heat target.
 - Existing per-profile heat and cool curve weights still scale the result.
-- Curve results are rounded to the nearest `0.5 F` before final min/max and Auto-gap normalization.
+- Curve and effective target results are rounded to the nearest `0.5 F` before final min/max and Auto-gap normalization.
 - Away mode does not use the comfort curve; it uses the configured away heat/cool safety range.
 
 Example: with home comfort `70 F` and outdoor temperature `60 F`, the heat curve adds `1.0 F` before final min/max and Auto-gap normalization.
@@ -285,13 +291,13 @@ Outdoor boost uses the outdoor temperature sensor only when HVAC preference is `
 
 Defaults:
 
-- Hot boost starts at `80 F`
+- Hot boost starts at `95 F`
 - Cold boost starts at `55 F`
 - Boost deadband is `2 F`
 
-Hot boost remains active until outdoor temperature drops below `78 F`. Cold boost remains active until outdoor temperature rises above `57 F`.
+Hot boost remains active until outdoor temperature drops below `93 F`. Cold boost remains active until outdoor temperature rises above `57 F`.
 
-Outdoor boost does not override explicit `Heat`, `Cool`, or `Off`. In transition season, it primarily shapes the `heat_cool` range instead of forcing a single mode. In summer and winter, Climate Manager may already be using single-mode `cool` or `heat`, and the active target remains centered on the comfort target by default.
+Outdoor boost does not override explicit `Heat`, `Cool`, or `Off`. In `Auto`, it stacks with the outdoor comfort curve before the effective comfort target is capped. Cold boost makes the effective target `1.0 F` warmer than the curve alone; hot boost makes it `1.0 F` cooler than the curve alone. In transition season, Climate Manager then builds the `heat_cool` range around that capped effective comfort target. In summer and winter, Climate Manager may already be using single-mode `cool` or `heat`, and the active target remains centered on the capped effective comfort target by default.
 
 ## Ecobee Heat/Cool Minimum Gap Handling
 
@@ -470,7 +476,7 @@ Check:
 - `Current set temp`
 - Your outdoor temperature sensor reading against a local weather source for the same time period
 
-With the defaults, spring/fall transition Auto should move from `67 / 73` to `64 / 70` when hot boost activates at `80 F`. If `Outdoor boost state` stays `none`, check the outdoor temperature sensor and the configured hot boost threshold.
+With the defaults, spring/fall transition Auto should move from `67 / 73` to `65 / 71` when hot boost activates at `95 F`. If `Outdoor boost state` stays `none`, check the outdoor temperature sensor and the configured hot boost threshold.
 
 ### Heating Is Not Responding To Colder Outdoor Temperatures
 
@@ -484,7 +490,7 @@ Check:
 - `Current set temp`
 - Your outdoor temperature sensor reading against a local weather source for the same time period
 
-With the defaults, spring/fall transition Auto should move from `67 / 73` to `70 / 76` when cold boost activates at `55 F`.
+With the defaults, spring/fall transition Auto should move from `67 / 73` to `69.5 / 75.5` when cold boost activates at `55 F`.
 
 ### It Keeps Entering Manual Override
 
@@ -536,7 +542,7 @@ Existing installs keep their current option values. New comfort-centered options
 - `Guest comfort target`: `70 F`
 - `Transition comfort band`: `6 F`
 - `Minimum Auto heat/cool gap`: `6 F`
-- `Outdoor hot boost temperature`: `80 F`
+- `Outdoor hot boost temperature`: `95 F`
 - `Outdoor cold boost temperature`: `55 F`
 - `Outdoor boost deadband`: `2 F`
 
