@@ -268,6 +268,31 @@ The `Current set temp` sensor reports the active side during hot or cold boost. 
 
 Sleep and Guest use the same math around the default comfort target unless their custom comfort target options are enabled.
 
+### Comfort Target Pipeline
+
+In comfort-centered `Auto`, Climate Manager uses one comfort-target pipeline before it decides what to send to the thermostat:
+
+1. Resolve the base comfort target from the active profile.
+2. Calculate the outdoor comfort curve adjustment.
+3. Add the active outdoor boost adjustment, if any.
+4. Calculate the effective comfort target.
+5. Cap the effective comfort target between the configured minimum cool target and maximum heat target.
+6. Generate the transition heat/cool range from the capped effective comfort target.
+7. Run final thermostat safety normalization on the generated range.
+8. Send the final thermostat command if it differs meaningfully from the current thermostat state.
+
+The comfort target cap applies only to the effective comfort target. It does not directly clamp the transition heat or cool target. After the range is generated, final thermostat safety normalization may still adjust one or both sides so the command respects the configured heat/cool limits and the minimum required Auto spread.
+
+Example with a capped cold adjustment:
+
+- Base comfort target: `70 F`
+- Outdoor comfort curve adjustment: `+7 F`
+- Cold boost adjustment: `+1 F`
+- Raw effective comfort target: `78 F`
+- Capped effective comfort target: `75 F`
+- Transition comfort band: `6 F`
+- Generated transition heat/cool range before final safety normalization: `72 / 78`
+
 ## Comfort Curve Behavior
 
 In comfort-centered `Auto`, Climate Manager applies a linear outdoor curve around the active profile comfort target:
@@ -299,6 +324,10 @@ Hot boost remains active until outdoor temperature drops below `93 F`. Cold boos
 
 Outdoor boost does not override explicit `Heat`, `Cool`, or `Off`. In `Auto`, it stacks with the outdoor comfort curve before the effective comfort target is capped. Cold boost makes the effective target `1.0 F` warmer than the curve alone; hot boost makes it `1.0 F` cooler than the curve alone. In transition season, Climate Manager then builds the `heat_cool` range around that capped effective comfort target. In summer and winter, Climate Manager may already be using single-mode `cool` or `heat`, and the active target remains centered on the capped effective comfort target by default.
 
+The displayed `Outdoor boost state` values remain `hot`, `cold`, or `none` for compatibility. The internal option name for hot outdoor boost is legacy-compatible, but the user-facing setting is `Outdoor hot boost temperature`.
+
+The `95 F` hot boost default applies to new installs and installs that do not already have a saved hot boost option. Existing installs keep their saved option value until changed in the integration options.
+
 ## Ecobee Heat/Cool Minimum Gap Handling
 
 Some thermostats, including Ecobee, require a minimum spread between `target_temp_low` and `target_temp_high` in Auto/`heat_cool`.
@@ -306,6 +335,8 @@ Some thermostats, including Ecobee, require a minimum spread between `target_tem
 Climate Manager uses `Minimum Auto heat/cool gap`, default `6 F`, and will normalize outgoing Auto ranges so Home Assistant and the thermostat accept them. The built-in minimum is never lower than `5 F`.
 
 Final Auto ranges are normalized in one pass so they respect both the configured heat/cool min/max limits and the minimum Auto gap whenever that is possible. If the configured allowed range is narrower than the minimum Auto gap, Climate Manager falls back to the widest range allowed by the configured limits and adds `range_gap_limited` to `Active control reason`. If a configured min target is higher than its matching max target, `Active control reason` includes `range_limits_invalid`.
+
+This final normalization is separate from the comfort target cap. The cap limits the effective comfort target before transition range generation; normalization protects the final thermostat command after the heat/cool range has been generated.
 
 ## Legacy Profile And Curve Behavior
 
