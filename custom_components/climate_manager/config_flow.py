@@ -33,6 +33,7 @@ WINDOWS_ACTION_OPTIONS = [
 ]
 
 OPTIONS_MENU = [
+    "entities",
     "simple_comfort",
     "transition_boost",
     "safety_limits",
@@ -42,6 +43,25 @@ OPTIONS_MENU = [
     "diagnostics",
     "temperature_units",
 ]
+
+ENTITY_CONFIG_KEYS = (
+    CONF_THERMOSTAT_ENTITY,
+    CONF_OUTDOOR_TEMP_ENTITY,
+    CONF_SLEEP_SCHEDULE_ENTITY,
+    CONF_AWAY_ENTITY,
+    CONF_GUEST_ENTITY,
+    CONF_OVERRIDE_ENTITY,
+    CONF_WINDOWS_ENTITY,
+    CONF_SEASON_ENTITY,
+)
+EDITABLE_ENTITY_CONFIG_KEYS = tuple(
+    key for key in ENTITY_CONFIG_KEYS
+    if key != CONF_THERMOSTAT_ENTITY
+)
+REQUIRED_ENTITY_CONFIG_KEYS = (
+    CONF_THERMOSTAT_ENTITY,
+    CONF_OUTDOOR_TEMP_ENTITY,
+)
 
 SIMPLE_COMFORT_KEYS = (
     CONF_SMART_CONTROL_ENABLED,
@@ -412,6 +432,35 @@ def _build_options_schema(defaults: dict[str, Any], keys: Iterable[str], unit: s
     )
 
 
+def _entity_selector(key: str):
+    domains: dict[str, str | list[str]] = {
+        CONF_THERMOSTAT_ENTITY: "climate",
+        CONF_OUTDOOR_TEMP_ENTITY: "sensor",
+        CONF_SLEEP_SCHEDULE_ENTITY: "schedule",
+        CONF_AWAY_ENTITY: "input_boolean",
+        CONF_GUEST_ENTITY: "input_boolean",
+        CONF_OVERRIDE_ENTITY: "input_boolean",
+        CONF_WINDOWS_ENTITY: "binary_sensor",
+        CONF_SEASON_ENTITY: ["input_text", "sensor", "select"],
+    }
+    return selector.EntitySelector(selector.EntitySelectorConfig(domain=domains[key]))
+
+
+def _build_entity_fields(
+    defaults: dict[str, Any] | None = None,
+    keys: Iterable[str] = ENTITY_CONFIG_KEYS,
+) -> dict[Any, Any]:
+    fields: dict[Any, Any] = {}
+    for key in keys:
+        current = defaults.get(key) if defaults else None
+        if key in REQUIRED_ENTITY_CONFIG_KEYS:
+            marker = vol.Required(key, default=current) if current else vol.Required(key)
+        else:
+            marker = vol.Optional(key, default=current) if current else vol.Optional(key)
+        fields[marker] = _entity_selector(key)
+    return fields
+
+
 class ClimateManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Climate Manager."""
 
@@ -426,42 +475,21 @@ class ClimateManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """Handle the initial step."""
         if user_input is not None:
+            # The thermostat is the stable config-entry identity and is not editable later.
             await self.async_set_unique_id(user_input[CONF_THERMOSTAT_ENTITY])
             self._abort_if_unique_id_configured()
             return self.async_create_entry(title="Climate Manager", data=user_input)
 
-        schema = vol.Schema(
+        fields = _build_entity_fields()
+        fields.update(
             {
-                vol.Required(CONF_THERMOSTAT_ENTITY): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="climate")
-                ),
-                vol.Required(CONF_OUTDOOR_TEMP_ENTITY): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="sensor")
-                ),
                 vol.Required(
                     CONF_TEMPERATURE_UNIT_MODE,
                     default=DEFAULT_NEW_TEMPERATURE_UNIT_MODE,
                 ): _select_box(TEMPERATURE_UNIT_MODES, "temperature_unit_mode"),
-                vol.Optional(CONF_SLEEP_SCHEDULE_ENTITY): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="schedule")
-                ),
-                vol.Optional(CONF_AWAY_ENTITY): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="input_boolean")
-                ),
-                vol.Optional(CONF_GUEST_ENTITY): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="input_boolean")
-                ),
-                vol.Optional(CONF_OVERRIDE_ENTITY): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="input_boolean")
-                ),
-                vol.Optional(CONF_WINDOWS_ENTITY): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="binary_sensor")
-                ),
-                vol.Optional(CONF_SEASON_ENTITY): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=["input_text", "sensor", "select"])
-                ),
             }
         )
+        schema = vol.Schema(fields)
         return self.async_show_form(step_id="user", data_schema=schema)
 
 
@@ -472,7 +500,9 @@ class ClimateManagerOptionsFlow(config_entries.OptionsFlow):
         self._config_entry = config_entry
 
     def _raw_options(self) -> dict[str, Any]:
-        return {**self._config_entry.data, **self._config_entry.options}
+        raw = {**self._config_entry.data, **self._config_entry.options}
+        raw[CONF_THERMOSTAT_ENTITY] = self._config_entry.data[CONF_THERMOSTAT_ENTITY]
+        return raw
 
     def _unit_mode(self) -> str:
         return _temperature_unit_mode(self._raw_options())
@@ -489,13 +519,45 @@ class ClimateManagerOptionsFlow(config_entries.OptionsFlow):
     def _save(self, updates: dict[str, Any], unit: str):
         converted = _options_to_storage(updates, unit)
         raw = {**self._raw_options(), **converted}
+        return self.async_create_entry(title="", data=self._normalized_settings_options(raw, unit))
+
+    def _normalized_settings_options(self, raw: dict[str, Any], unit: str) -> dict[str, Any]:
+        """Normalize settings while preserving entity overrides stored in options."""
         normalized = _normalize_options(raw, round_temperatures=_storage_should_round(unit))
         normalized[CONF_TEMPERATURE_UNIT_MODE] = _temperature_unit_mode(raw)
-        return self.async_create_entry(title="", data=normalized)
+        for key in EDITABLE_ENTITY_CONFIG_KEYS:
+            if key in self._config_entry.options:
+                normalized[key] = self._config_entry.options[key]
+        return normalized
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         """Show options menu."""
         return self.async_show_menu(step_id="init", menu_options=OPTIONS_MENU)
+
+    async def async_step_entities(self, user_input: dict[str, Any] | None = None):
+        """Manage configurable supporting entities."""
+        if user_input is not None:
+            entity_updates = {
+                key: user_input.get(key)
+                for key in EDITABLE_ENTITY_CONFIG_KEYS
+            }
+            preserved_options = {
+                key: value
+                for key, value in self._config_entry.options.items()
+                if key != CONF_THERMOSTAT_ENTITY
+            }
+            return self.async_create_entry(
+                title="",
+                data={**preserved_options, **entity_updates},
+            )
+
+        schema = vol.Schema(
+            _build_entity_fields(
+                self._raw_options(),
+                EDITABLE_ENTITY_CONFIG_KEYS,
+            )
+        )
+        return self.async_show_form(step_id="entities", data_schema=schema)
 
     async def _async_step_options(
         self,
@@ -545,9 +607,10 @@ class ClimateManagerOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             raw = {**self._raw_options(), **user_input}
             unit = resolve_temperature_unit(self.hass, _temperature_unit_mode(raw))
-            normalized = _normalize_options(raw, round_temperatures=_storage_should_round(unit))
-            normalized[CONF_TEMPERATURE_UNIT_MODE] = _temperature_unit_mode(raw)
-            return self.async_create_entry(title="", data=normalized)
+            return self.async_create_entry(
+                title="",
+                data=self._normalized_settings_options(raw, unit),
+            )
 
         schema = vol.Schema(
             {

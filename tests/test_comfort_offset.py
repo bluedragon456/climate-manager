@@ -1,78 +1,10 @@
 """Regression tests for comfort offset target resolution."""
 from __future__ import annotations
 
-import sys
-import types
 import unittest
-from datetime import datetime, timezone
-from pathlib import Path
 from types import SimpleNamespace
 
-
-ROOT = Path(__file__).resolve().parents[1]
-PACKAGE_ROOT = ROOT / "custom_components" / "climate_manager"
-
-
-def install_homeassistant_stubs() -> None:
-    """Install enough Home Assistant modules to import manager pure logic."""
-    homeassistant = types.ModuleType("homeassistant")
-    const = types.ModuleType("homeassistant.const")
-    core = types.ModuleType("homeassistant.core")
-    helpers = types.ModuleType("homeassistant.helpers")
-    event = types.ModuleType("homeassistant.helpers.event")
-    storage = types.ModuleType("homeassistant.helpers.storage")
-    util = types.ModuleType("homeassistant.util")
-    dt = types.ModuleType("homeassistant.util.dt")
-
-    class UnitOfTemperature:
-        FAHRENHEIT = "F"
-        CELSIUS = "C"
-
-    class Store:
-        def __class_getitem__(cls, _item):
-            return cls
-
-        def __init__(self, *_args, **_kwargs) -> None:
-            self.data = None
-
-        async def async_load(self):
-            return self.data
-
-        async def async_save(self, data):
-            self.data = data
-
-    const.ATTR_ENTITY_ID = "entity_id"
-    const.STATE_OFF = "off"
-    const.STATE_ON = "on"
-    const.UnitOfTemperature = UnitOfTemperature
-    core.CALLBACK_TYPE = object
-    core.HomeAssistant = object
-    core.callback = lambda func: func
-    event.async_call_later = lambda *_args, **_kwargs: None
-    event.async_track_state_change_event = lambda *_args, **_kwargs: None
-    storage.Store = Store
-    dt.utcnow = lambda: datetime(2026, 1, 1, tzinfo=timezone.utc)
-    dt.parse_datetime = lambda value: value
-    util.dt = dt
-    helpers.event = event
-    helpers.storage = storage
-
-    sys.modules.setdefault("homeassistant", homeassistant)
-    sys.modules.setdefault("homeassistant.const", const)
-    sys.modules.setdefault("homeassistant.core", core)
-    sys.modules.setdefault("homeassistant.helpers", helpers)
-    sys.modules.setdefault("homeassistant.helpers.event", event)
-    sys.modules.setdefault("homeassistant.helpers.storage", storage)
-    sys.modules.setdefault("homeassistant.util", util)
-    sys.modules.setdefault("homeassistant.util.dt", dt)
-
-
-def install_package_stub() -> None:
-    custom_components = types.ModuleType("custom_components")
-    package = types.ModuleType("custom_components.climate_manager")
-    package.__path__ = [str(PACKAGE_ROOT)]
-    sys.modules.setdefault("custom_components", custom_components)
-    sys.modules.setdefault("custom_components.climate_manager", package)
+from homeassistant_stubs import install_homeassistant_stubs, install_package_stub
 
 
 install_homeassistant_stubs()

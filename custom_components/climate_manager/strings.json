@@ -27,6 +27,7 @@
       "init": {
         "title": "Climate Manager options",
         "menu_options": {
+          "entities": "Entities",
           "simple_comfort": "Simple comfort",
           "transition_boost": "Transition Auto and outdoor boost",
           "safety_limits": "Safety, away, and limits",
@@ -35,6 +36,19 @@
           "legacy": "Legacy explicit Heat/Cool tuning",
           "diagnostics": "Diagnostics",
           "temperature_units": "Temperature units"
+        }
+      },
+      "entities": {
+        "title": "Entities",
+        "description": "Choose the supporting entities Climate Manager uses. The thermostat identifies this integration entry and cannot be changed after setup. Changes reload the integration.",
+        "data": {
+          "outdoor_temp_entity": "Outdoor temperature sensor",
+          "sleep_schedule_entity": "Sleep schedule",
+          "away_entity": "Away mode boolean",
+          "guest_entity": "Guest mode boolean",
+          "override_entity": "Manual climate lock boolean",
+          "windows_entity": "Window or door open sensor",
+          "season_entity": "Season source"
         }
       },
       "simple_comfort": {

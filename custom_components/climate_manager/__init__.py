@@ -11,6 +11,7 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import (
     CONF_TEMPERATURE_UNIT_MODE,
+    CONF_THERMOSTAT_ENTITY,
     CONF_GUEST_COMFORT_TARGET,
     CONF_GUEST_COMFORT_TARGET_OVERRIDE,
     CONF_HOME_COMFORT_TARGET,
@@ -75,6 +76,8 @@ def _profile_comfort_override_enabled(
 def _build_manager_config(hass: HomeAssistant, entry: ConfigEntry) -> ManagerConfig:
     stored: dict[str, Any] = {**entry.data, **entry.options}
     raw: dict[str, Any] = {**DEFAULT_OPTIONS, **entry.data, **entry.options}
+    # The thermostat is the immutable config-entry identity; options cannot replace it.
+    raw[CONF_THERMOSTAT_ENTITY] = entry.data[CONF_THERMOSTAT_ENTITY]
     unit_mode = str(raw.get(CONF_TEMPERATURE_UNIT_MODE, DEFAULT_EXISTING_TEMPERATURE_UNIT_MODE))
     if unit_mode not in TEMPERATURE_UNIT_MODES:
         unit_mode = DEFAULT_EXISTING_TEMPERATURE_UNIT_MODE
