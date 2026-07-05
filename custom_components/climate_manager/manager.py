@@ -438,7 +438,8 @@ class ClimateManager:
             self.runtime.active_comfort_target = comfort
             return comfort, None
         if desired_mode == HVAC_PREF_COOL:
-            raw_offset = cool_offset + self._outdoor_boost_comfort_offset(boost)
+            raw_offset = self._resolve_active_comfort_offset("heat_cool", heat_offset, cool_offset)
+            raw_offset += self._outdoor_boost_comfort_offset(boost)
             comfort = self._cap_effective_comfort_target(self._effective_comfort_target(base_comfort, raw_offset))
             self.runtime.comfort_offset = round_to_half(comfort - base_comfort)
             self.runtime.active_comfort_target = comfort

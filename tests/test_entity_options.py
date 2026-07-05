@@ -29,6 +29,8 @@ from custom_components.climate_manager.config_flow import (  # noqa: E402
 from custom_components.climate_manager.const import (  # noqa: E402
     CONF_AWAY_ENTITY,
     CONF_COMFORT_TARGET,
+    CONF_COOL_CURVE_WEIGHT_HOME,
+    CONF_CURVE_WEIGHT_HOME,
     CONF_GUEST_ENTITY,
     CONF_OUTDOOR_TEMP_ENTITY,
     CONF_OVERRIDE_ENTITY,
@@ -37,6 +39,7 @@ from custom_components.climate_manager.const import (  # noqa: E402
     CONF_TEMPERATURE_UNIT_MODE,
     CONF_THERMOSTAT_ENTITY,
     CONF_WINDOWS_ENTITY,
+    HVAC_PREF_COOL,
     PROFILE_HOME,
     TEMPERATURE_UNIT_MODE_CELSIUS,
 )
@@ -254,6 +257,55 @@ class EntityOptionsTests(unittest.IsolatedAsyncioTestCase):
             TEMPERATURE_UNIT_MODE_CELSIUS,
         )
 
+    async def test_comfort_curve_options_write_same_keys_runtime_reads(self) -> None:
+        flow = ClimateManagerOptionsFlow(make_entry(data=OLD_ENTITIES))
+        flow.hass = make_hass()
+
+        result = await flow.async_step_comfort_curve(
+            {
+                CONF_CURVE_WEIGHT_HOME: 0.5,
+                CONF_COOL_CURVE_WEIGHT_HOME: 0.25,
+            }
+        )
+
+        self.assertEqual(result["data"][CONF_CURVE_WEIGHT_HOME], 0.5)
+        self.assertEqual(result["data"][CONF_COOL_CURVE_WEIGHT_HOME], 0.25)
+
+        config = integration._build_manager_config(
+            make_hass(),
+            make_entry(data=OLD_ENTITIES, options=result["data"]),
+        )
+
+        self.assertEqual(config.curve_weight_home, 0.5)
+        self.assertEqual(config.cool_curve_weight_home, 0.25)
+
+    def test_changed_comfort_curve_options_are_reflected_after_reload_build(self) -> None:
+        entry = make_entry(
+            data=OLD_ENTITIES,
+            options={CONF_CURVE_WEIGHT_HOME: 1.0},
+        )
+        initial = integration._build_manager_config(make_hass(), entry)
+
+        entry.options = {CONF_CURVE_WEIGHT_HOME: 0.5}
+        reloaded = integration._build_manager_config(make_hass(), entry)
+
+        self.assertEqual(initial.curve_weight_home, 1.0)
+        self.assertEqual(reloaded.curve_weight_home, 0.5)
+
+    async def test_reload_entry_uses_home_assistant_config_entry_reload(self) -> None:
+        calls = []
+
+        class FakeConfigEntries:
+            async def async_reload(self, entry_id):
+                calls.append(entry_id)
+
+        await integration.async_reload_entry(
+            SimpleNamespace(config_entries=FakeConfigEntries()),
+            SimpleNamespace(entry_id="entry"),
+        )
+
+        self.assertEqual(calls, ["entry"])
+
     def test_runtime_ignores_thermostat_option_and_uses_other_overrides(self) -> None:
         hass = make_hass(
             {
@@ -284,6 +336,30 @@ class EntityOptionsTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(getattr(config, attribute), expected)
         self.assertEqual(manager._outdoor_temperature_f(), 72.0)
         self.assertEqual(manager._thermostat_snapshot().hvac_mode, "off")
+
+    def test_entity_reconfiguration_uses_new_outdoor_sensor_with_curve_options(self) -> None:
+        hass = make_hass(
+            {
+                "sensor.old_outdoor": "70",
+                "sensor.new_outdoor": "62",
+            }
+        )
+        options = {
+            **NEW_EDITABLE_ENTITIES,
+            CONF_CURVE_WEIGHT_HOME: 0.5,
+        }
+        config = integration._build_manager_config(
+            hass,
+            make_entry(data=OLD_ENTITIES, options=options),
+        )
+        manager = ClimateManager(hass, "entry", config)
+
+        target_heat, target_cool = manager._resolve_comfort_auto_targets(PROFILE_HOME, HVAC_PREF_COOL)
+
+        self.assertEqual(config.outdoor_temp_entity, NEW_ENTITIES[CONF_OUTDOOR_TEMP_ENTITY])
+        self.assertEqual(manager._outdoor_temperature_f(), 62.0)
+        self.assertEqual(manager.runtime.comfort_offset, 0.5)
+        self.assertEqual((target_heat, target_cool), (None, 70.5))
 
     def test_missing_or_unavailable_entities_do_not_crash_runtime(self) -> None:
         config = integration._build_manager_config(

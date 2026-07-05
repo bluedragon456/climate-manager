@@ -16,6 +16,8 @@ from custom_components.climate_manager.const import (  # noqa: E402
     PROFILE_HOME,
     PROFILE_MANUAL_OVERRIDE,
     PROFILE_SLEEP,
+    SEASON_SUMMER,
+    SEASON_WINTER,
 )
 from custom_components.climate_manager.manager import (  # noqa: E402
     OUTDOOR_BOOST_COLD,
@@ -153,6 +155,69 @@ class ComfortOffsetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manager.runtime.active_comfort_target, 71.0)
         self.assertEqual((target_heat, target_cool), (71.0, None))
 
+    def test_heating_uses_positive_half_step_for_cool_outdoor_temperature(self) -> None:
+        manager = self.make_manager(
+            outdoor=62.0,
+            config=ManagerConfig("climate.test", curve_weight_home=0.5),
+        )
+
+        target_heat, target_cool = manager._resolve_comfort_auto_targets(PROFILE_HOME, HVAC_PREF_HEAT)
+
+        self.assertEqual(manager.runtime.comfort_offset, 0.5)
+        self.assertEqual(manager.runtime.active_comfort_target, 70.5)
+        self.assertEqual((target_heat, target_cool), (70.5, None))
+
+    def test_heating_season_uses_positive_half_step_for_cool_outdoor_temperature(self) -> None:
+        manager = self.make_manager(
+            outdoor=62.0,
+            config=ManagerConfig("climate.test", curve_weight_home=0.5),
+        )
+        manager._current_season = lambda: SEASON_WINTER
+
+        desired_mode = manager._resolve_desired_hvac_mode(PROFILE_HOME)
+        target_heat, target_cool = manager._resolve_comfort_auto_targets(PROFILE_HOME, desired_mode)
+
+        self.assertEqual(desired_mode, HVAC_PREF_HEAT)
+        self.assertEqual(manager.runtime.active_control_reason, "auto_heating_season")
+        self.assertEqual(manager.runtime.comfort_offset, 0.5)
+        self.assertEqual(manager.runtime.active_comfort_target, 70.5)
+        self.assertEqual((target_heat, target_cool), (70.5, None))
+
+    def test_heating_season_warm_outdoor_temperature_keeps_base_comfort_target(self) -> None:
+        manager = self.make_manager(outdoor=75.0)
+        manager._current_season = lambda: SEASON_WINTER
+
+        desired_mode = manager._resolve_desired_hvac_mode(PROFILE_HOME)
+        target_heat, target_cool = manager._resolve_comfort_auto_targets(PROFILE_HOME, desired_mode)
+
+        self.assertEqual(desired_mode, HVAC_PREF_HEAT)
+        self.assertEqual(manager.runtime.outdoor_boost_state, OUTDOOR_BOOST_NONE)
+        self.assertEqual(manager.runtime.comfort_offset, 0.0)
+        self.assertEqual(manager.runtime.active_comfort_target, 70.0)
+        self.assertEqual((target_heat, target_cool), (70.0, None))
+
+    async def test_heating_service_call_uses_adjusted_comfort_target(self) -> None:
+        services = FakeServices()
+        manager = self.make_manager(
+            outdoor=62.0,
+            config=ManagerConfig("climate.test", curve_weight_home=0.5),
+        )
+        manager.hass = SimpleNamespace(services=services)
+        manager._thermostat_snapshot = lambda: ThermostatSnapshot("heat", 70.5, None, None, None, True)
+        target_heat, target_cool = manager._resolve_comfort_auto_targets(PROFILE_HOME, HVAC_PREF_HEAT)
+        manager.runtime.active_profile = PROFILE_HOME
+        manager.runtime.desired_hvac_mode = HVAC_PREF_HEAT
+        manager.runtime.target_heat = target_heat
+        manager.runtime.target_cool = target_cool
+
+        await manager._apply_if_needed(ThermostatSnapshot("heat", 70.0, None, None, None, True))
+
+        self.assertEqual(len(services.calls), 1)
+        domain, service, data, blocking = services.calls[0]
+        self.assertEqual((domain, service, blocking), ("climate", "set_temperature", True))
+        self.assertEqual(data["entity_id"], "climate.test")
+        self.assertEqual(data["temperature"], 70.5)
+
     def test_cooling_uses_effective_target(self) -> None:
         manager = self.make_manager(outdoor=80.0)
 
@@ -161,6 +226,62 @@ class ComfortOffsetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manager.runtime.comfort_offset, -1.0)
         self.assertEqual(manager.runtime.active_comfort_target, 69.0)
         self.assertEqual((target_heat, target_cool), (None, 69.0))
+
+    def test_cooling_season_uses_positive_half_step_for_cool_outdoor_temperature(self) -> None:
+        manager = self.make_manager(
+            outdoor=62.0,
+            config=ManagerConfig("climate.test", curve_weight_home=0.5),
+        )
+        manager._current_season = lambda: SEASON_SUMMER
+
+        desired_mode = manager._resolve_desired_hvac_mode(PROFILE_HOME)
+        target_heat, target_cool = manager._resolve_comfort_auto_targets(PROFILE_HOME, desired_mode)
+
+        self.assertEqual(desired_mode, HVAC_PREF_COOL)
+        self.assertEqual(manager.runtime.active_control_reason, "auto_cooling_season")
+        self.assertEqual(manager.runtime.comfort_offset, 0.5)
+        self.assertEqual(manager.runtime.active_comfort_target, 70.5)
+        self.assertEqual((target_heat, target_cool), (None, 70.5))
+
+    def test_heat_and_cool_modes_preserve_valid_comfort_offsets(self) -> None:
+        heat_manager = self.make_manager(
+            outdoor=62.0,
+            config=ManagerConfig("climate.test", curve_weight_home=0.5),
+        )
+        cool_manager = self.make_manager(
+            outdoor=62.0,
+            config=ManagerConfig("climate.test", curve_weight_home=0.5),
+        )
+
+        target_heat, target_cool = heat_manager._resolve_comfort_auto_targets(PROFILE_HOME, HVAC_PREF_HEAT)
+        cool_target_heat, cool_target_cool = cool_manager._resolve_comfort_auto_targets(PROFILE_HOME, HVAC_PREF_COOL)
+
+        self.assertEqual(heat_manager.runtime.comfort_offset, 0.5)
+        self.assertEqual((target_heat, target_cool), (70.5, None))
+        self.assertEqual(cool_manager.runtime.comfort_offset, 0.5)
+        self.assertEqual((cool_target_heat, cool_target_cool), (None, 70.5))
+
+    async def test_cooling_service_call_uses_adjusted_comfort_target(self) -> None:
+        services = FakeServices()
+        manager = self.make_manager(
+            outdoor=62.0,
+            config=ManagerConfig("climate.test", curve_weight_home=0.5),
+        )
+        manager.hass = SimpleNamespace(services=services)
+        manager._thermostat_snapshot = lambda: ThermostatSnapshot("cool", 70.5, None, None, None, True)
+        target_heat, target_cool = manager._resolve_comfort_auto_targets(PROFILE_HOME, HVAC_PREF_COOL)
+        manager.runtime.active_profile = PROFILE_HOME
+        manager.runtime.desired_hvac_mode = HVAC_PREF_COOL
+        manager.runtime.target_heat = target_heat
+        manager.runtime.target_cool = target_cool
+
+        await manager._apply_if_needed(ThermostatSnapshot("cool", 70.0, None, None, None, True))
+
+        self.assertEqual(len(services.calls), 1)
+        domain, service, data, blocking = services.calls[0]
+        self.assertEqual((domain, service, blocking), ("climate", "set_temperature", True))
+        self.assertEqual(data["entity_id"], "climate.test")
+        self.assertEqual(data["temperature"], 70.5)
 
     def test_manual_override_stays_outside_comfort_auto(self) -> None:
         manager = self.make_manager(outdoor=60.0)
