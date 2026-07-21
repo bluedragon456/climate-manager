@@ -73,8 +73,13 @@ def install_homeassistant_stubs() -> None:
         def async_create_entry(self, *, title, data):
             return {"type": "create_entry", "title": title, "data": data}
 
-        def async_show_form(self, *, step_id, data_schema):
-            return {"type": "form", "step_id": step_id, "data_schema": data_schema}
+        def async_show_form(self, *, step_id, data_schema, errors=None):
+            return {
+                "type": "form",
+                "step_id": step_id,
+                "data_schema": data_schema,
+                "errors": errors or {},
+            }
 
         def async_show_menu(self, *, step_id, menu_options):
             return {"type": "menu", "step_id": step_id, "menu_options": menu_options}

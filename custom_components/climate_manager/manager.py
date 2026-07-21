@@ -22,6 +22,7 @@ from .const import (
     PROFILE_MANUAL_OVERRIDE,
     PROFILE_OVERRIDE_LOCK,
     PROFILE_PAUSED,
+    PROFILE_PRE_ARRIVAL,
     PROFILE_SENSORS_OPEN,
     PROFILE_SLEEP,
     SEASON_AUTUMN,
@@ -34,6 +35,7 @@ from .const import (
     STATUS_MANUAL_OVERRIDE,
     STATUS_PAUSED,
     STATUS_UNAVAILABLE,
+    STATUS_WINDOW_SAFETY_OVERRIDE,
     STATUS_WINDOWS_BACKOFF,
     WINDOWS_ACTION_COOL_SETBACK,
     WINDOWS_ACTION_HEAT_SETBACK,
@@ -64,6 +66,7 @@ OUTDOOR_BOOST_NONE = "none"
 OUTDOOR_BOOST_HOT = "hot"
 OUTDOOR_BOOST_COLD = "cold"
 OUTDOOR_BOOST_ADJUSTMENT = 1.0
+WINDOW_ACTIVE_RECHECK_SECONDS = 60
 SEASONAL_BASELINES: dict[str, tuple[float, float]] = {
     SEASON_WINTER: (69.0, 74.0),
     SEASON_SPRING: (66.0, 71.0),
@@ -84,6 +87,10 @@ class ClimateManager:
         self._subscribers: list[Callable[[], None]] = []
         self._save_handle: CALLBACK_TYPE | None = None
         self._window_timer_handle: CALLBACK_TYPE | None = None
+        self._window_timer_generation = 0
+        self._window_timer_expected_at: Any = None
+        self._window_timer_kind: str | None = None
+        self._last_window_timer_reason: str | None = None
         self._override_timer_handle: CALLBACK_TYPE | None = None
         self._lock = asyncio.Lock()
         self.last_reason: str | None = None
@@ -113,6 +120,7 @@ class ClimateManager:
             self.config.override_entity,
             self.config.windows_entity,
             self.config.season_entity,
+            self.config.pre_arrival_entity,
         ]
         tracked_entities = [entity_id for entity_id in tracked if entity_id]
         if tracked_entities:
@@ -134,9 +142,7 @@ class ClimateManager:
         if self._save_handle:
             self._save_handle()
             self._save_handle = None
-        if self._window_timer_handle:
-            self._window_timer_handle()
-            self._window_timer_handle = None
+        self._cancel_window_timer()
         if self._override_timer_handle:
             self._override_timer_handle()
             self._override_timer_handle = None
@@ -169,40 +175,113 @@ class ClimateManager:
             self._schedule_window_recalc_if_needed()
         self.hass.async_create_task(self.async_recalculate(f"state_change:{entity_id}"))
     @callback
-    def _schedule_window_recalc_if_needed(self) -> None:
-        """Schedule a recalc for window open/close timers."""
+    def _cancel_window_timer(self) -> None:
+        """Cancel the current window timer and invalidate queued callbacks."""
+        self._window_timer_generation += 1
         if self._window_timer_handle:
             self._window_timer_handle()
             self._window_timer_handle = None
+        self._window_timer_expected_at = None
+        self._window_timer_kind = None
+    @callback
+    def _schedule_window_recalc_if_needed(self) -> None:
+        """Schedule a recalc for window open/close timers."""
+        self._cancel_window_timer()
         if not self.config.windows_entity:
             return
         entity_state = self.hass.states.get(self.config.windows_entity)
         current = now()
         if entity_state is not None and entity_state.state == STATE_ON:
-            if self.runtime.windows_open_since is not None and self.runtime.windows_backoff_until is not None:
+            if (
+                not self.runtime.windows_backoff_active
+                and self.runtime.windows_open_since is not None
+                and self.runtime.windows_backoff_until is not None
+            ):
                 fire_in = (self.runtime.windows_backoff_until - current).total_seconds()
                 if fire_in > 0:
-                    self._window_timer_handle = async_call_later(
-                        self.hass,
-                        fire_in,
-                        self._async_window_timer_recalc,
-                    )
-            return
-        if self.runtime.windows_closed_since is not None:
-            fire_in = (
-                self.runtime.windows_closed_since
-                + timedelta(seconds=self.config.windows_restore_delay_minutes)
-                - current
-            ).total_seconds()
-            if fire_in > 0:
-                self._window_timer_handle = async_call_later(
-                    self.hass,
-                    fire_in,
-                    self._async_window_timer_recalc,
+                    self._schedule_window_timer(fire_in, self.runtime.windows_backoff_until, "open_delay")
+            elif self.runtime.windows_backoff_active:
+                expected_at = current + timedelta(seconds=WINDOW_ACTIVE_RECHECK_SECONDS)
+                kind = "active_recheck"
+                safety_deadline = self.window_safety_deadline
+                if (
+                    self.config.windows_safety_override_enabled
+                    and self.window_safety_configuration_valid
+                    and not self.runtime.windows_safety_override_active
+                    and safety_deadline is not None
+                    and safety_deadline <= expected_at
+                ):
+                    expected_at = safety_deadline
+                    kind = "safety_deadline"
+                self._schedule_window_timer(
+                    max(0.0, (expected_at - current).total_seconds()),
+                    expected_at,
+                    kind,
                 )
-    async def _async_window_timer_recalc(self, *_: Any) -> None:
+            return
+        if (
+            (entity_state is None or entity_state.state != STATE_OFF)
+            and self.runtime.windows_backoff_active
+        ):
+            expected_at = current + timedelta(seconds=WINDOW_ACTIVE_RECHECK_SECONDS)
+            kind = "active_recheck"
+            safety_deadline = self.window_safety_deadline
+            if (
+                self.config.windows_safety_override_enabled
+                and self.window_safety_configuration_valid
+                and not self.runtime.windows_safety_override_active
+                and safety_deadline is not None
+                and safety_deadline <= expected_at
+            ):
+                expected_at = safety_deadline
+                kind = "safety_deadline"
+            self._schedule_window_timer(
+                max(0.0, (expected_at - current).total_seconds()),
+                expected_at,
+                kind,
+            )
+            return
+        if (
+            entity_state is not None
+            and entity_state.state == STATE_OFF
+            and self.runtime.windows_backoff_active
+            and self.runtime.windows_closed_since is not None
+        ):
+            expected_at = self.runtime.windows_closed_since + timedelta(
+                seconds=self.config.windows_restore_delay_minutes
+            )
+            fire_in = (expected_at - current).total_seconds()
+            if fire_in > 0:
+                self._schedule_window_timer(fire_in, expected_at, "restore_delay")
+    @callback
+    def _schedule_window_timer(self, fire_in: float, expected_at: Any, kind: str) -> None:
+        """Schedule one generation-checked window lifecycle callback."""
+        generation = self._window_timer_generation
+        self._window_timer_expected_at = expected_at
+        self._window_timer_kind = kind
+
+        async def _timer_callback(*_: Any) -> None:
+            await self._async_window_timer_recalc(generation, kind)
+
+        self._window_timer_handle = async_call_later(
+            self.hass,
+            fire_in,
+            _timer_callback,
+        )
+    async def _async_window_timer_recalc(
+        self,
+        generation: int | None = None,
+        kind: str | None = None,
+        *_: Any,
+    ) -> None:
         """Recalculate when a window timer expires."""
+        if generation is not None and generation != self._window_timer_generation:
+            self._last_window_timer_reason = f"ignored_stale:{kind or 'unknown'}"
+            return
         self._window_timer_handle = None
+        self._window_timer_expected_at = None
+        self._window_timer_kind = None
+        self._last_window_timer_reason = f"fired:{kind or 'direct'}"
         await self.async_recalculate("window_timer")
     @callback
     def _schedule_override_recalc_if_needed(self) -> None:
@@ -231,15 +310,38 @@ class ClimateManager:
         async with self._lock:
             self.last_reason = reason
             _LOGGER.debug("Recalculating climate manager because %s", reason)
+            # Window timing must progress even while the thermostat is unavailable.
+            self._windows_backoff_active()
             self._refresh_override_state()
             thermostat = self._thermostat_snapshot()
+            self._refresh_window_safety_state(thermostat)
+            if not self.config.smart_control_enabled or self.runtime.paused:
+                self.runtime.active_profile = PROFILE_PAUSED
+                self.runtime.desired_hvac_mode = None
+                self.runtime.target_heat = None
+                self.runtime.target_cool = None
+                self.runtime.transition_heat_target = None
+                self.runtime.transition_cool_target = None
+                self.runtime.active_comfort_target = None
+                self.runtime.active_control_reason = f"blocked:{PROFILE_PAUSED}"
+                self._update_status()
+                self._schedule_window_recalc_if_needed()
+                self._schedule_override_recalc_if_needed()
+                self._schedule_save()
+                self._notify_subscribers()
+                return
             if not thermostat.available:
                 self.runtime.status = STATUS_UNAVAILABLE
+                self._schedule_window_recalc_if_needed()
+                self._schedule_override_recalc_if_needed()
                 self._schedule_save()
                 self._notify_subscribers()
                 return
             if reason == "startup" or reason.startswith(f"state_change:{self.config.thermostat_entity}"):
                 self._detect_manual_change(reason, thermostat)
+                # A thermostat change can create a manual override. Apply window
+                # cancellation policy in the same control pass, not one event later.
+                self._refresh_override_state()
             profile = self._resolve_profile()
             desired_mode = self._resolve_desired_hvac_mode(profile)
             if self._comfort_auto_outdoor_unavailable(profile, desired_mode):
@@ -296,12 +398,19 @@ class ClimateManager:
             return PROFILE_PAUSED
         if state_is_on(self.hass, self.config.override_entity):
             return PROFILE_OVERRIDE_LOCK
+        if self.runtime.windows_safety_override_active:
+            return PROFILE_SENSORS_OPEN
         if self.runtime.manual_override_active:
             return PROFILE_MANUAL_OVERRIDE
         if self._windows_backoff_active():
             self.runtime.windows_backoff_active = True
             return PROFILE_SENSORS_OPEN
         self.runtime.windows_backoff_active = False
+        if (
+            state_is_on(self.hass, self.config.away_entity)
+            and state_is_on(self.hass, self.config.pre_arrival_entity)
+        ):
+            return PROFILE_PRE_ARRIVAL
         if state_is_on(self.hass, self.config.away_entity):
             return PROFILE_AWAY
         if state_is_on(self.hass, self.config.guest_entity):
@@ -313,6 +422,12 @@ class ClimateManager:
         if profile in {PROFILE_PAUSED, PROFILE_OVERRIDE_LOCK, PROFILE_MANUAL_OVERRIDE}:
             self.runtime.active_control_reason = f"blocked:{profile}"
             return None
+        if self.runtime.windows_safety_override_active:
+            desired_mode = self._window_safety_desired_hvac_mode()
+            self.runtime.active_control_reason = (
+                f"window_temperature_safety:{self.runtime.windows_safety_activation_reason or 'active'}"
+            )
+            return desired_mode
         if profile == PROFILE_SENSORS_OPEN:
             if self.config.windows_action == WINDOWS_ACTION_OFF:
                 if self._should_use_freeze_protection():
@@ -348,6 +463,8 @@ class ClimateManager:
         self.runtime.active_comfort_target = None
         self.runtime.transition_heat_target = None
         self.runtime.transition_cool_target = None
+        if self.runtime.windows_safety_override_active:
+            return self._window_safety_targets(desired_mode)
         if self._should_use_comfort_auto_targets(profile, desired_mode):
             return self._resolve_comfort_auto_targets(profile, desired_mode)
         return self._resolve_profile_curve_targets(profile, desired_mode)
@@ -450,7 +567,7 @@ class ClimateManager:
             return self.config.sleep_comfort_target
         if profile == PROFILE_GUEST and self.config.guest_comfort_target_override:
             return self.config.guest_comfort_target
-        if profile == PROFILE_HOME and self.config.home_comfort_target_override:
+        if profile in {PROFILE_HOME, PROFILE_PRE_ARRIVAL} and self.config.home_comfort_target_override:
             return self.config.home_comfort_target
         return self.config.comfort_target
     def _resolve_comfort_curve_offsets(self, profile: str, comfort: float) -> tuple[float, float]:
@@ -541,7 +658,7 @@ class ClimateManager:
         base_heat: float | None,
         base_cool: float | None,
     ) -> tuple[float | None, float | None]:
-        if profile not in {PROFILE_HOME, PROFILE_SLEEP, PROFILE_GUEST, PROFILE_AWAY}:
+        if profile not in {PROFILE_HOME, PROFILE_PRE_ARRIVAL, PROFILE_SLEEP, PROFILE_GUEST, PROFILE_AWAY}:
             return base_heat, base_cool
         heat_delta, cool_delta = self._seasonal_baseline_delta()
         if base_heat is not None:
@@ -640,6 +757,282 @@ class ClimateManager:
         if thermostat.target_temp_low is not None:
             return thermostat.target_temp_low
         return thermostat.target_temp_high
+    @property
+    def windows_raw_state(self) -> str | None:
+        """Return the configured aggregate window sensor's raw state."""
+        if not self.config.windows_entity:
+            return None
+        state = self.hass.states.get(self.config.windows_entity)
+        return None if state is None else state.state
+    @property
+    def windows_protection_state(self) -> str:
+        """Return a diagnostic phase for the window protection lifecycle."""
+        if not self.config.windows_entity:
+            return "disabled"
+        raw_state = self.windows_raw_state
+        if raw_state not in {STATE_ON, STATE_OFF}:
+            if self.runtime.windows_backoff_active:
+                return "active_sensor_unavailable"
+            if self.runtime.windows_open_since is not None:
+                return "pending_sensor_unavailable"
+            return "sensor_unavailable"
+        if self.runtime.windows_backoff_active and self.runtime.windows_closed_since is not None:
+            return "restoring"
+        if self.runtime.windows_backoff_active:
+            return "active"
+        if self.runtime.windows_open_since is not None:
+            return "pending"
+        return "idle"
+    @property
+    def window_timer_scheduled(self) -> bool:
+        return self._window_timer_expected_at is not None
+    @property
+    def window_timer_expected_at(self) -> Any:
+        return self._window_timer_expected_at
+    @property
+    def window_timer_kind(self) -> str | None:
+        return self._window_timer_kind
+    @property
+    def last_window_timer_reason(self) -> str | None:
+        return self._last_window_timer_reason
+    @property
+    def pre_arrival_raw_state(self) -> str | None:
+        if not self.config.pre_arrival_entity:
+            return None
+        state = self.hass.states.get(self.config.pre_arrival_entity)
+        return None if state is None else state.state
+    @property
+    def pre_arrival_blocked_reason(self) -> str | None:
+        if not self.config.pre_arrival_entity:
+            return "not_configured"
+        raw_state = self.pre_arrival_raw_state
+        if raw_state in {"unknown", "unavailable", None}:
+            return "entity_unavailable"
+        if raw_state != STATE_ON:
+            return "inactive"
+        if not state_is_on(self.hass, self.config.away_entity):
+            return "not_away"
+        if self.runtime.active_profile == PROFILE_PRE_ARRIVAL:
+            return None
+        return f"blocked:{self.runtime.active_profile or 'unknown'}"
+    @property
+    def thermostat_hvac_action(self) -> str | None:
+        state = self.hass.states.get(self.config.thermostat_entity)
+        if state is None:
+            return None
+        return state.attributes.get("hvac_action")
+    @property
+    def thermostat_supported_hvac_modes(self) -> set[str] | None:
+        """Return advertised thermostat modes, or None when the entity omits them."""
+        state = self.hass.states.get(self.config.thermostat_entity)
+        if state is None:
+            return None
+        modes = state.attributes.get("hvac_modes")
+        if not isinstance(modes, (list, tuple, set)):
+            return None
+        return {str(mode) for mode in modes}
+    @property
+    def above_cooling_target_while_idle(self) -> bool:
+        thermostat = self._thermostat_snapshot()
+        target = self.runtime.target_cool
+        if target is None:
+            target = self.runtime.last_commanded_temp or self.runtime.last_commanded_high
+        return bool(
+            thermostat.available
+            and thermostat.current_temperature is not None
+            and target is not None
+            and thermostat.current_temperature > target
+            and self.thermostat_hvac_action != "cooling"
+        )
+    @property
+    def window_safety_configuration_valid(self) -> bool:
+        """Return whether the independent window safety envelope is usable."""
+        minimum = self.config.windows_safety_min_indoor_temperature
+        maximum = self.config.windows_safety_max_indoor_temperature
+        hysteresis = self.config.windows_safety_hysteresis
+        return (
+            self.config.windows_safety_maximum_backoff_minutes > 0
+            and hysteresis >= 0
+            and minimum + hysteresis < maximum - hysteresis
+        )
+    @property
+    def window_safety_deadline(self) -> Any:
+        """Return the deadline measured from window backoff activation."""
+        if not self.config.windows_safety_override_enabled:
+            return None
+        backoff_started = self.runtime.windows_backoff_until
+        if backoff_started is None and self.runtime.windows_open_since is not None:
+            backoff_started = self.runtime.windows_open_since + timedelta(
+                minutes=self.config.windows_open_delay_minutes
+            )
+        if backoff_started is None:
+            return None
+        return backoff_started + timedelta(
+            minutes=self.config.windows_safety_maximum_backoff_minutes
+        )
+    @property
+    def window_safety_envelope(self) -> tuple[float, float]:
+        """Return independent heat/cool targets that restore the configured safe band."""
+        return (
+            self.config.windows_safety_min_indoor_temperature
+            + self.config.windows_safety_hysteresis,
+            self.config.windows_safety_max_indoor_temperature
+            - self.config.windows_safety_hysteresis,
+        )
+    @property
+    def window_safety_blocked_reason(self) -> str | None:
+        """Return the higher-precedence state preventing an active safety command."""
+        if not self.runtime.windows_safety_override_active:
+            return None
+        if not self.config.smart_control_enabled:
+            return "disabled"
+        if self.runtime.paused:
+            return "paused"
+        if not self._thermostat_snapshot().available:
+            return "thermostat_unavailable"
+        if state_is_on(self.hass, self.config.override_entity):
+            return "override_lock"
+        modes = self.thermostat_supported_hvac_modes
+        desired_mode = self._window_safety_desired_hvac_mode()
+        if modes is not None and desired_mode not in modes:
+            return f"unsupported_hvac_mode:{desired_mode}"
+        return None
+    @property
+    def window_safety_state(self) -> str:
+        """Return the diagnostic state of the opt-in safety layer."""
+        if not self.config.windows_safety_override_enabled:
+            return "disabled"
+        if not self.window_safety_configuration_valid:
+            return "misconfigured"
+        if self.runtime.windows_safety_override_active:
+            return "active_blocked" if self.window_safety_blocked_reason else "active"
+        if self.runtime.windows_backoff_active:
+            return "armed"
+        if self.runtime.windows_open_since is not None:
+            return "waiting_for_backoff"
+        return "idle"
+    @property
+    def window_safety_capability_issue(self) -> str | None:
+        """Describe thermostat mode limitations relevant to safety control."""
+        modes = self.thermostat_supported_hvac_modes
+        if modes is None:
+            return None
+        if "heat_cool" in modes:
+            return None
+        if HVAC_PREF_HEAT in modes and HVAC_PREF_COOL in modes:
+            return "heat_cool_not_supported_using_single_mode_fallback"
+        if HVAC_PREF_HEAT in modes:
+            return "cooling_not_supported"
+        if HVAC_PREF_COOL in modes:
+            return "heating_not_supported"
+        return "no_protective_hvac_mode_supported"
+    @property
+    def underlying_occupancy_profile(self) -> str:
+        """Return the profile that would apply without blocking or window layers."""
+        if (
+            state_is_on(self.hass, self.config.away_entity)
+            and state_is_on(self.hass, self.config.pre_arrival_entity)
+        ):
+            return PROFILE_PRE_ARRIVAL
+        if state_is_on(self.hass, self.config.away_entity):
+            return PROFILE_AWAY
+        if state_is_on(self.hass, self.config.guest_entity):
+            return PROFILE_GUEST
+        if state_is_on(self.hass, self.config.sleep_schedule_entity):
+            return PROFILE_SLEEP
+        return PROFILE_HOME
+    def _refresh_window_safety_state(self, thermostat: ThermostatSnapshot) -> None:
+        """Arm, latch, or clear the independent window safety layer."""
+        if (
+            not self.config.windows_safety_override_enabled
+            or not self.window_safety_configuration_valid
+            or not self.runtime.windows_backoff_active
+        ):
+            if not self.config.windows_safety_override_enabled:
+                clear_reason = "feature_disabled"
+            elif not self.window_safety_configuration_valid:
+                clear_reason = "configuration_invalid"
+            else:
+                clear_reason = "window_backoff_ended"
+            self._clear_window_safety_state(clear_reason)
+            return
+        if self.runtime.windows_safety_override_active:
+            return
+        trigger = None
+        indoor = thermostat.current_temperature
+        if indoor is not None:
+            if indoor >= self.config.windows_safety_max_indoor_temperature:
+                trigger = "high_indoor_temperature"
+            elif indoor <= self.config.windows_safety_min_indoor_temperature:
+                trigger = "low_indoor_temperature"
+        deadline = self.window_safety_deadline
+        if trigger is None and deadline is not None and now() >= deadline:
+            trigger = "maximum_backoff_duration"
+        if trigger is not None:
+            self.runtime.windows_safety_override_active = True
+            self.runtime.windows_safety_activated_at = now()
+            self.runtime.windows_safety_activation_reason = trigger
+            self.runtime.windows_safety_cleared_at = None
+            self.runtime.windows_safety_clear_reason = None
+            _LOGGER.warning(
+                "Window temperature safety override activated for %s: trigger=%s indoor=%s deadline=%s",
+                self.entry_id,
+                trigger,
+                indoor,
+                deadline,
+            )
+    def _window_safety_desired_hvac_mode(self) -> str:
+        """Choose a protective mode without changing the stored HVAC preference."""
+        indoor = self._thermostat_snapshot().current_temperature
+        modes = self.thermostat_supported_hvac_modes
+
+        def supported(mode: str) -> bool:
+            return modes is None or mode in modes
+
+        if indoor is not None:
+            if indoor <= self.config.windows_safety_min_indoor_temperature:
+                if supported(HVAC_PREF_HEAT):
+                    return HVAC_PREF_HEAT
+                if supported("heat_cool"):
+                    return "heat_cool"
+                return HVAC_PREF_HEAT
+            if indoor >= self.config.windows_safety_max_indoor_temperature:
+                if supported(HVAC_PREF_COOL):
+                    return HVAC_PREF_COOL
+                if supported("heat_cool"):
+                    return "heat_cool"
+                return HVAC_PREF_COOL
+        trigger = self.runtime.windows_safety_activation_reason
+        if trigger == "low_indoor_temperature":
+            if supported(HVAC_PREF_HEAT):
+                return HVAC_PREF_HEAT
+            return "heat_cool" if supported("heat_cool") else HVAC_PREF_HEAT
+        if trigger == "high_indoor_temperature":
+            if supported(HVAC_PREF_COOL):
+                return HVAC_PREF_COOL
+            return "heat_cool" if supported("heat_cool") else HVAC_PREF_COOL
+        if supported("heat_cool"):
+            return "heat_cool"
+        available_single_modes = [
+            mode for mode in (HVAC_PREF_HEAT, HVAC_PREF_COOL) if supported(mode)
+        ]
+        if len(available_single_modes) == 1:
+            return available_single_modes[0]
+        if len(available_single_modes) == 2 and indoor is not None:
+            distance_to_minimum = indoor - self.config.windows_safety_min_indoor_temperature
+            distance_to_maximum = self.config.windows_safety_max_indoor_temperature - indoor
+            return HVAC_PREF_HEAT if distance_to_minimum <= distance_to_maximum else HVAC_PREF_COOL
+        return "heat_cool"
+    def _window_safety_targets(self, desired_mode: str | None) -> tuple[float | None, float | None]:
+        """Return independent safety targets, not normal profile limits."""
+        target_heat, target_cool = self.window_safety_envelope
+        if desired_mode == HVAC_PREF_HEAT:
+            return target_heat, None
+        if desired_mode == HVAC_PREF_COOL:
+            return None, target_cool
+        if desired_mode == "heat_cool":
+            return target_heat, target_cool
+        return None, None
     def _thermostat_snapshot(self) -> ThermostatSnapshot:
         state = self.hass.states.get(self.config.thermostat_entity)
         if state is None or state.state in {"unavailable", "unknown"}:
@@ -716,7 +1109,10 @@ class ClimateManager:
         expected_low: float | None,
         expected_high: float | None,
     ) -> bool:
-        normalized_expected_low, normalized_expected_high = self.normalize_heat_cool_range(expected_low, expected_high)
+        if self.runtime.windows_safety_override_active:
+            normalized_expected_low, normalized_expected_high = expected_low, expected_high
+        else:
+            normalized_expected_low, normalized_expected_high = self.normalize_heat_cool_range(expected_low, expected_high)
         return (
             nearly_equal(observed_low, normalized_expected_low, self.config.temp_change_threshold)
             and nearly_equal(observed_high, normalized_expected_high, self.config.temp_change_threshold)
@@ -975,6 +1371,24 @@ class ClimateManager:
                 outcome="ignored:insignificant",
             )
             return
+        if in_grace_window:
+            self._log_manual_detection_event(
+                reason=reason,
+                thermostat_snapshot=thermostat_snapshot,
+                commanded_snapshot=commanded_snapshot,
+                command_time=command_time,
+                grace_until=grace_window,
+                settle_until=settle_window,
+                in_grace_window=in_grace_window,
+                in_settle_window=in_settle_window,
+                mode_changed=mode_changed,
+                temp_changed=temp_changed,
+                override_activated=False,
+                field_changes=field_changes,
+                heat_cool_equivalent=heat_cool_equivalent,
+                outcome="ignored:grace_window",
+            )
+            return
         manual_reason = "manual hvac mode change detected" if mode_changed else "manual temperature change detected"
         manual_behavior = self.config.manual_mode_behavior if mode_changed else self.config.manual_temp_behavior
         treated_as_manual_override = self._apply_manual_behavior(
@@ -1042,11 +1456,18 @@ class ClimateManager:
         self.runtime.manual_override_until = None
         self.runtime.manual_hold = False
         self._active_manual_override_snapshot = None
+    def _clear_window_safety_state(self, reason: str) -> None:
+        was_active = self.runtime.windows_safety_override_active
+        self.runtime.windows_safety_override_active = False
+        if was_active:
+            self.runtime.windows_safety_cleared_at = now()
+            self.runtime.windows_safety_clear_reason = reason
     def _clear_windows_backoff_state(self) -> None:
         self.runtime.windows_open_since = None
         self.runtime.windows_closed_since = None
         self.runtime.windows_backoff_until = None
         self.runtime.windows_backoff_active = False
+        self._clear_window_safety_state("window_restore_completed")
     async def async_clear_override(self) -> None:
         """Clear a manual override and re-baseline manual detection."""
         self.last_action = "clear_override"
@@ -1105,23 +1526,34 @@ class ClimateManager:
             return False
         current = now()
         entity_state = self.hass.states.get(self.config.windows_entity)
-        is_open = entity_state is not None and entity_state.state == STATE_ON
+        raw_state = None if entity_state is None else entity_state.state
         open_delay = timedelta(minutes=self.config.windows_open_delay_minutes)
         close_buffer = timedelta(seconds=self.config.windows_restore_delay_minutes)
-        if is_open:
+        if raw_state == STATE_ON:
             if self.runtime.windows_open_since is None:
                 self.runtime.windows_open_since = current
             self.runtime.windows_closed_since = None
             self.runtime.windows_backoff_until = self.runtime.windows_open_since + open_delay
-            return current >= self.runtime.windows_backoff_until
+            self.runtime.windows_backoff_active = current >= self.runtime.windows_backoff_until
+            return self.runtime.windows_backoff_active
+        if raw_state != STATE_OFF:
+            # Unknown, unavailable, and missing states are not proof of closure.
+            # Freeze the last trustworthy lifecycle state and cancel restoration.
+            self.runtime.windows_closed_since = None
+            return self.runtime.windows_backoff_active
         if self.runtime.windows_open_since is None:
             self.runtime.windows_backoff_until = None
             self.runtime.windows_closed_since = None
+            self.runtime.windows_backoff_active = False
+            return False
+        if not self.runtime.windows_backoff_active:
+            # A trustworthy close before activation cancels the pending period.
+            self._clear_windows_backoff_state()
             return False
         if self.runtime.windows_closed_since is None:
             self.runtime.windows_closed_since = current
         if current - self.runtime.windows_closed_since < close_buffer:
-            return self.runtime.windows_backoff_until is not None and current >= self.runtime.windows_backoff_until
+            return True
         self._clear_windows_backoff_state()
         return False
     async def _apply_if_needed(self, thermostat: ThermostatSnapshot) -> None:
@@ -1133,6 +1565,18 @@ class ClimateManager:
         target_cool = self.runtime.target_cool
         if desired_mode is None:
             return
+        if self.runtime.windows_safety_override_active:
+            modes = self.thermostat_supported_hvac_modes
+            if modes is not None and desired_mode not in modes:
+                blocked_action = f"window_safety_blocked:{desired_mode}"
+                if self.last_action != blocked_action:
+                    _LOGGER.error(
+                        "Cannot apply window temperature safety for %s because thermostat does not support %s",
+                        self.entry_id,
+                        desired_mode,
+                    )
+                self.last_action = blocked_action
+                return
         if desired_mode == HVAC_PREF_OFF:
             if thermostat.hvac_mode != STATE_OFF:
                 await self._async_set_hvac_mode(STATE_OFF)
@@ -1146,18 +1590,25 @@ class ClimateManager:
             if not nearly_equal(thermostat.target_temp, target_cool, self.config.temp_change_threshold):
                 await self._async_set_temperature(temperature=target_cool)
         elif desired_mode == "heat_cool" and target_heat is not None and target_cool is not None:
-            normalized_heat, normalized_cool = self.normalize_heat_cool_range(
-                target_heat,
-                target_cool,
-                update_reason=True,
-            )
+            if self.runtime.windows_safety_override_active:
+                normalized_heat, normalized_cool = target_heat, target_cool
+            else:
+                normalized_heat, normalized_cool = self.normalize_heat_cool_range(
+                    target_heat,
+                    target_cool,
+                    update_reason=True,
+                )
             if not self.is_equivalent_heat_cool_range(
                 thermostat.target_temp_low,
                 thermostat.target_temp_high,
                 normalized_heat,
                 normalized_cool,
             ):
-                await self._async_set_temperature(target_temp_low=normalized_heat, target_temp_high=normalized_cool)
+                await self._async_set_temperature(
+                    target_temp_low=normalized_heat,
+                    target_temp_high=normalized_cool,
+                    normalize_heat_cool=not self.runtime.windows_safety_override_active,
+                )
     async def _async_set_hvac_mode(self, hvac_mode: str) -> None:
         self.last_action = f"set_hvac_mode:{hvac_mode}"
         _LOGGER.debug("Applying HVAC mode %s to %s", hvac_mode, self.config.thermostat_entity)
@@ -1175,10 +1626,12 @@ class ClimateManager:
         temperature: float | None = None,
         target_temp_low: float | None = None,
         target_temp_high: float | None = None,
+        *,
+        normalize_heat_cool: bool = True,
     ) -> None:
         requested_target_temp_low = target_temp_low
         requested_target_temp_high = target_temp_high
-        if target_temp_low is not None and target_temp_high is not None:
+        if normalize_heat_cool and target_temp_low is not None and target_temp_high is not None:
             target_temp_low, target_temp_high = self.normalize_heat_cool_range(target_temp_low, target_temp_high)
             self._log_manual_diagnostics(
                 "Normalizing outgoing heat_cool command for %s: requested_range=(%s, %s) normalized_range=(%s, %s) min_spread=%s",
@@ -1214,6 +1667,8 @@ class ClimateManager:
             self.runtime.status = STATUS_PAUSED
         elif self.runtime.active_profile == PROFILE_MANUAL_OVERRIDE:
             self.runtime.status = STATUS_MANUAL_OVERRIDE
+        elif self.runtime.windows_safety_override_active:
+            self.runtime.status = STATUS_WINDOW_SAFETY_OVERRIDE
         elif self.runtime.active_profile == PROFILE_SENSORS_OPEN:
             self.runtime.status = STATUS_WINDOWS_BACKOFF
         elif self.runtime.desired_hvac_mode is None:

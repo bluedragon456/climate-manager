@@ -38,6 +38,7 @@ OPTIONS_MENU = [
     "transition_boost",
     "safety_limits",
     "manual_windows",
+    "window_safety",
     "comfort_curve",
     "legacy",
     "diagnostics",
@@ -53,6 +54,7 @@ ENTITY_CONFIG_KEYS = (
     CONF_OVERRIDE_ENTITY,
     CONF_WINDOWS_ENTITY,
     CONF_SEASON_ENTITY,
+    CONF_PRE_ARRIVAL_ENTITY,
 )
 EDITABLE_ENTITY_CONFIG_KEYS = tuple(
     key for key in ENTITY_CONFIG_KEYS
@@ -100,6 +102,13 @@ MANUAL_WINDOWS_KEYS = (
     CONF_WINDOWS_ACTION,
     CONF_WINDOWS_OPEN_DELAY_MINUTES,
     CONF_WINDOWS_RESTORE_DELAY_MINUTES,
+)
+WINDOW_SAFETY_KEYS = (
+    CONF_WINDOWS_SAFETY_OVERRIDE_ENABLED,
+    CONF_WINDOWS_SAFETY_MAXIMUM_BACKOFF_MINUTES,
+    CONF_WINDOWS_SAFETY_MIN_INDOOR_TEMPERATURE,
+    CONF_WINDOWS_SAFETY_MAX_INDOOR_TEMPERATURE,
+    CONF_WINDOWS_SAFETY_HYSTERESIS,
 )
 COMFORT_CURVE_KEYS = (
     CONF_CURVE_WEIGHT_HOME,
@@ -167,6 +176,8 @@ ABSOLUTE_TEMP_LIMITS = {
     CONF_MAX_HEAT_TARGET: (30, 100),
     CONF_MIN_COOL_TARGET: (30, 100),
     CONF_MAX_COOL_TARGET: (30, 100),
+    CONF_WINDOWS_SAFETY_MIN_INDOOR_TEMPERATURE: (30, 100),
+    CONF_WINDOWS_SAFETY_MAX_INDOOR_TEMPERATURE: (30, 100),
 }
 DELTA_TEMP_LIMITS = {
     CONF_CURVE_BAND_1_OFFSET: (-20, 20),
@@ -181,6 +192,7 @@ DELTA_TEMP_LIMITS = {
     CONF_MINIMUM_AUTO_GAP: (0, 20),
     CONF_OUTDOOR_OVERRIDE_DEADBAND: (0, 20),
     CONF_TEMP_CHANGE_THRESHOLD: (0, 10),
+    CONF_WINDOWS_SAFETY_HYSTERESIS: (0, 10),
 }
 
 
@@ -272,6 +284,30 @@ def _normalize_options(
         CONF_WINDOWS_OPEN_DELAY_MINUTES: int(data.get(CONF_WINDOWS_OPEN_DELAY_MINUTES, DEFAULT_WINDOWS_OPEN_DELAY_MINUTES)),
         CONF_WINDOWS_RESTORE_DELAY_MINUTES: int(data.get(CONF_WINDOWS_RESTORE_DELAY_MINUTES, DEFAULT_WINDOWS_RESTORE_DELAY_MINUTES)),
         CONF_WINDOWS_ACTION: str(data.get(CONF_WINDOWS_ACTION, DEFAULT_WINDOWS_ACTION)),
+        CONF_WINDOWS_SAFETY_OVERRIDE_ENABLED: bool(
+            data.get(CONF_WINDOWS_SAFETY_OVERRIDE_ENABLED, DEFAULT_WINDOWS_SAFETY_OVERRIDE_ENABLED)
+        ),
+        CONF_WINDOWS_SAFETY_MAXIMUM_BACKOFF_MINUTES: int(
+            data.get(
+                CONF_WINDOWS_SAFETY_MAXIMUM_BACKOFF_MINUTES,
+                DEFAULT_WINDOWS_SAFETY_MAXIMUM_BACKOFF_MINUTES,
+            )
+        ),
+        CONF_WINDOWS_SAFETY_MIN_INDOOR_TEMPERATURE: float(
+            data.get(
+                CONF_WINDOWS_SAFETY_MIN_INDOOR_TEMPERATURE,
+                DEFAULT_WINDOWS_SAFETY_MIN_INDOOR_TEMPERATURE,
+            )
+        ),
+        CONF_WINDOWS_SAFETY_MAX_INDOOR_TEMPERATURE: float(
+            data.get(
+                CONF_WINDOWS_SAFETY_MAX_INDOOR_TEMPERATURE,
+                DEFAULT_WINDOWS_SAFETY_MAX_INDOOR_TEMPERATURE,
+            )
+        ),
+        CONF_WINDOWS_SAFETY_HYSTERESIS: float(
+            data.get(CONF_WINDOWS_SAFETY_HYSTERESIS, DEFAULT_WINDOWS_SAFETY_HYSTERESIS)
+        ),
         CONF_MIN_HEAT_TARGET: float(data.get(CONF_MIN_HEAT_TARGET, DEFAULT_MIN_HEAT_TARGET)),
         CONF_MAX_HEAT_TARGET: float(data.get(CONF_MAX_HEAT_TARGET, DEFAULT_MAX_HEAT_TARGET)),
         CONF_MIN_COOL_TARGET: float(data.get(CONF_MIN_COOL_TARGET, DEFAULT_MIN_COOL_TARGET)),
@@ -405,13 +441,17 @@ def _field_selector(key: str, unit: str):
         CONF_HOME_COMFORT_TARGET_OVERRIDE,
         CONF_SLEEP_COMFORT_TARGET_OVERRIDE,
         CONF_GUEST_COMFORT_TARGET_OVERRIDE,
+        CONF_WINDOWS_SAFETY_OVERRIDE_ENABLED,
     }:
         return selector.BooleanSelector()
     if key in {
         CONF_OVERRIDE_DURATION_MINUTES,
         CONF_WINDOWS_OPEN_DELAY_MINUTES,
         CONF_WINDOWS_RESTORE_DELAY_MINUTES,
+        CONF_WINDOWS_SAFETY_MAXIMUM_BACKOFF_MINUTES,
     }:
+        if key == CONF_WINDOWS_SAFETY_MAXIMUM_BACKOFF_MINUTES:
+            return _int_box(min_value=1, max_value=10080)
         return _int_box(min_value=1 if key == CONF_OVERRIDE_DURATION_MINUTES else 0, max_value=1440)
     if key == CONF_MANUAL_GRACE_SECONDS:
         return _int_box(min_value=0, max_value=600)
@@ -442,6 +482,7 @@ def _entity_selector(key: str):
         CONF_OVERRIDE_ENTITY: "input_boolean",
         CONF_WINDOWS_ENTITY: "binary_sensor",
         CONF_SEASON_ENTITY: ["input_text", "sensor", "select"],
+        CONF_PRE_ARRIVAL_ENTITY: ["binary_sensor", "input_boolean"],
     }
     return selector.EntitySelector(selector.EntitySelectorConfig(domain=domains[key]))
 
@@ -588,6 +629,27 @@ class ClimateManagerOptionsFlow(config_entries.OptionsFlow):
     async def async_step_manual_windows(self, user_input: dict[str, Any] | None = None):
         """Manage manual override and window/door options."""
         return await self._async_step_options("manual_windows", MANUAL_WINDOWS_KEYS, user_input)
+
+    async def async_step_window_safety(self, user_input: dict[str, Any] | None = None):
+        """Manage the opt-in window temperature safety envelope."""
+        unit = self._unit()
+        defaults = self._defaults(unit)
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            converted = _options_to_storage(user_input, unit)
+            minimum = float(converted[CONF_WINDOWS_SAFETY_MIN_INDOOR_TEMPERATURE])
+            maximum = float(converted[CONF_WINDOWS_SAFETY_MAX_INDOOR_TEMPERATURE])
+            hysteresis = float(converted[CONF_WINDOWS_SAFETY_HYSTERESIS])
+            if minimum + hysteresis >= maximum - hysteresis:
+                errors["base"] = "invalid_window_safety_envelope"
+                defaults = {**defaults, **converted}
+            else:
+                return self._save(user_input, unit)
+        return self.async_show_form(
+            step_id="window_safety",
+            data_schema=_build_options_schema(defaults, WINDOW_SAFETY_KEYS, unit),
+            errors=errors,
+        )
 
     async def async_step_comfort_curve(self, user_input: dict[str, Any] | None = None):
         """Manage comfort curve weights."""

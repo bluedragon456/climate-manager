@@ -9,7 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DATA_MANAGER, DOMAIN, STATUS_UNAVAILABLE
+from .const import DATA_MANAGER, DOMAIN, PROFILE_PRE_ARRIVAL, STATUS_UNAVAILABLE
 from .entity import ClimateManagerEntity
 from .manager import ClimateManager
 
@@ -36,9 +36,39 @@ BINARY_SENSORS: tuple[ClimateManagerBinarySensorDescription, ...] = (
         value_fn=lambda manager: manager.runtime.windows_backoff_active,
     ),
     ClimateManagerBinarySensorDescription(
+        key="window_temperature_safety_override_enabled",
+        translation_key="window_temperature_safety_override_enabled",
+        value_fn=lambda manager: manager.config.windows_safety_override_enabled,
+    ),
+    ClimateManagerBinarySensorDescription(
+        key="window_temperature_safety_override_active",
+        translation_key="window_temperature_safety_override_active",
+        value_fn=lambda manager: manager.runtime.windows_safety_override_active,
+    ),
+    ClimateManagerBinarySensorDescription(
+        key="window_temperature_safety_override_blocked",
+        translation_key="window_temperature_safety_override_blocked",
+        value_fn=lambda manager: manager.window_safety_blocked_reason is not None,
+    ),
+    ClimateManagerBinarySensorDescription(
         key="fail_safe_active",
         translation_key="fail_safe_active",
         value_fn=lambda manager: manager.runtime.status == STATUS_UNAVAILABLE,
+    ),
+    ClimateManagerBinarySensorDescription(
+        key="window_timer_scheduled",
+        translation_key="window_timer_scheduled",
+        value_fn=lambda manager: manager.window_timer_scheduled,
+    ),
+    ClimateManagerBinarySensorDescription(
+        key="pre_arrival_active",
+        translation_key="pre_arrival_active",
+        value_fn=lambda manager: manager.runtime.active_profile == PROFILE_PRE_ARRIVAL,
+    ),
+    ClimateManagerBinarySensorDescription(
+        key="above_cooling_target_while_idle",
+        translation_key="above_cooling_target_while_idle",
+        value_fn=lambda manager: manager.above_cooling_target_while_idle,
     ),
 )
 

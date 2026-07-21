@@ -15,6 +15,7 @@ class ManagerConfig:
     override_entity: str | None = None
     windows_entity: str | None = None
     season_entity: str | None = None
+    pre_arrival_entity: str | None = None
     temperature_unit_mode: str = "fahrenheit"
     smart_control_enabled: bool = True
     hvac_preference: str = "auto"
@@ -69,6 +70,11 @@ class ManagerConfig:
     windows_open_delay_minutes: int = 15
     windows_restore_delay_minutes: int = 15
     windows_action: str = "off"
+    windows_safety_override_enabled: bool = False
+    windows_safety_maximum_backoff_minutes: int = 240
+    windows_safety_min_indoor_temperature: float = 50.0
+    windows_safety_max_indoor_temperature: float = 80.0
+    windows_safety_hysteresis: float = 2.0
     min_heat_target: float = 60.0
     max_heat_target: float = 75.0
     min_cool_target: float = 68.0
@@ -97,6 +103,11 @@ class RuntimeState:
     manual_hold: bool = False
     windows_backoff_active: bool = False
     windows_backoff_until: datetime | None = None
+    windows_safety_override_active: bool = False
+    windows_safety_activated_at: datetime | None = None
+    windows_safety_activation_reason: str | None = None
+    windows_safety_cleared_at: datetime | None = None
+    windows_safety_clear_reason: str | None = None
     paused: bool = False
     status: str = "idle"
     last_commanded_hvac_mode: str | None = None

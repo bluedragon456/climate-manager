@@ -9,7 +9,7 @@ This integration is a good fit if you already have a working `climate` entity in
 Climate Manager currently:
 
 - Controls an existing thermostat entity
-- Supports `home`, `sleep`, `guest`, `away`, `manual override`, `override lock`, `windows open`, and `paused` states
+- Supports `home`, `sleep`, `guest`, `away`, `heading home`, `manual override`, `override lock`, `windows open`, and `paused` states
 - Uses comfort-centered Auto control with a default `70 F` comfort target
 - Supports Fahrenheit, Celsius, or Home Assistant system-unit temperature display/input
 - Shapes transition-season Auto ranges around outdoor hot and cold boost conditions
@@ -41,6 +41,15 @@ For each config entry, Climate Manager creates:
 - `Status`
 - `Override until`
 - `Windows backoff until`
+- `Window safety state`
+- `Window safety activation reason`
+- `Window safety activated at`
+- `Window safety cleared at`
+- `Window safety clear reason`
+- `Window safety deadline`
+- `Window safety minimum indoor temperature`
+- `Window safety maximum indoor temperature`
+- `Window safety hysteresis`
 - `Last reason`
 - `Last action`
 
@@ -49,6 +58,9 @@ For each config entry, Climate Manager creates:
 - `Smart control active`
 - `Manual override active`
 - `Windows backoff active`
+- `Window temperature safety override enabled`
+- `Window temperature safety override active`
+- `Window temperature safety override blocked`
 - `Fail-safe active`
 
 ### Buttons
@@ -106,6 +118,7 @@ Climate Manager is configured through the UI only. There is no YAML setup.
 - `Manual climate lock boolean`: an `input_boolean`
 - `Window or door open sensor`: a `binary_sensor`
 - `Season source`: an `input_text`, `sensor`, or `select`
+- `Heading home request`: a `binary_sensor` or `input_boolean` produced by an external Home Assistant automation
 
 ### Example Helpers
 
@@ -156,6 +169,14 @@ Use this first for normal comfort-centered Auto control:
 - Windows action: `Turn HVAC off`, `Heat setback`, or `Cool setback`
 - Window-open delay
 - Window-close restore delay
+
+### Window Temperature Safety Override
+
+- Opt-in enable switch, disabled by default
+- Maximum active window-backoff duration, default `240` minutes
+- Minimum safe indoor temperature, default `50 F`
+- Maximum safe indoor temperature, default `80 F`
+- Recovery hysteresis, default `2 F`
 
 ### Advanced Comfort Curve
 
@@ -209,10 +230,11 @@ Climate Manager resolves the active profile in this order:
 2. Override lock
 3. Manual override
 4. Windows backoff
-5. Away
-6. Guest
-7. Sleep
-8. Home
+5. Heading home, only when Away is active
+6. Away
+7. Guest
+8. Sleep
+9. Home
 
 ## HVAC Mode Selection
 
@@ -442,6 +464,28 @@ If windows action is `off`, there is still a freeze-protection behavior: when th
 
 When the sensor closes, Climate Manager waits for the configured restore delay before returning to normal control.
 
+The open delay is stored and interpreted in minutes. The restore setting retains the legacy internal key `windows_restore_delay_minutes` for backward compatibility, but its value is displayed and interpreted as seconds. Existing stored numeric values are not silently converted.
+
+Only an explicit `off` state from the configured aggregate sensor counts as a trustworthy close. `unknown`, `unavailable`, or a missing entity freezes the last trustworthy pending/active state and cannot restore HVAC control. Closing before the open deadline cancels pending protection immediately; closing after protection activates starts the restore delay. Reloads and restarts retain the original open, close, and deadline timestamps. While protection is active, a one-minute state recheck also recovers if Home Assistant's state changed but the expected close event was missed.
+
+With the `Turn HVAC off` action, an open sensor can still keep the HVAC off indefinitely by design when the optional Window Temperature Safety Override is disabled. Existing installations keep that behavior unless the feature is explicitly enabled.
+
+### Window Temperature Safety Override
+
+The opt-in safety layer preserves the configured window action initially, then independently watches the thermostat's `current_temperature` while backoff is active; no additional indoor sensor is required. It activates when the indoor temperature reaches the configured minimum or maximum, or when the maximum backoff duration expires. A low-temperature trigger temporarily selects Heat, a high-temperature trigger temporarily selects Cool, and the duration trigger selects a wide Heat/Cool safety envelope. The protective heat target is the minimum plus hysteresis; the protective cool target is the maximum minus hysteresis.
+
+When a thermostat advertises no `heat_cool` mode, maximum-duration protection selects its supported Heat or Cool mode according to which safety boundary is closer and re-evaluates on every control pass. Heat-only and Cool-only thermostats protect the capability they actually expose. If the mode required by the current unsafe temperature is unsupported, Climate Manager does not send an invalid command and reports the capability block in diagnostics.
+
+Safety remains latched while the window is open, unavailable, or in the close restore delay. It ends only after a trustworthy `off` window state completes the existing restore delay, at which point Climate Manager recalculates Home, Away, Guest, Sleep, Pre-arrival, or any retained manual override. It never changes the stored HVAC preference, `windows_action`, `min_heat_target`, or `max_cool_target`.
+
+Precedence is: disabled/paused, unavailable thermostat, override lock, window temperature safety, manual override, ordinary window backoff, pre-arrival, away, guest, sleep, then home. If override lock or another higher-priority block prevents an active safety command, the safety entities and diagnostics report that blocked state.
+
+## Heading Home Preconditioning
+
+Climate Manager can consume an optional `Heading home request` entity. Location, direction, authorization, and stale-data logic remain outside the integration in a Home Assistant automation; Climate Manager only consumes the resulting `on` or `off` state.
+
+When Away is active and the request is `on`, Climate Manager selects the `pre_arrival` profile. It keeps Away physically active, uses the Home comfort target and curve weights, and reuses the existing seasonal mode selection: summer uses cooling, winter uses heating, and spring/fall uses transition Auto. Pause, override lock, manual override, and window backoff remain higher priority. An unavailable or unknown request is treated as inactive.
+
 ## Services
 
 Climate Manager registers these services:
@@ -494,6 +538,8 @@ Check:
 - Windows backoff is not active
 - `Active control reason` is not `outdoor_temperature_unavailable`
 - The thermostat supports the requested HVAC mode and temperature fields
+
+For window incidents, inspect `Windows raw state`, `Windows protection state`, `Windows open since`, `Windows closed since`, `Windows backoff until`, `Window timer scheduled`, `Window timer expected at`, `Window timer kind`, `Last window timer reason`, `Window safety state`, `Window safety activation reason`, and `Window safety deadline`. These distinguish pending, active, restoring, unavailable-sensor, canceled, safety, blocked, and callback states without requiring log review.
 
 ### Cooling Is Not Responding To Hotter Outdoor Temperatures
 
@@ -578,6 +624,10 @@ Existing installs keep their current option values. New comfort-centered options
 - `Outdoor boost deadband`: `2 F`
 
 No old options are removed. In `Auto`, the new comfort-centered model supersedes old profile target and seasonal baseline behavior. Explicit `Heat`, explicit `Cool`, away safety range, and window/door setback behavior continue to use the existing profile target and curve options.
+
+The optional `pre_arrival_entity` is additive and defaults to unconfigured, so existing entries retain their current Away behavior. No config-entry migration is required.
+
+The legacy `windows_restore_delay_minutes` key is retained because released versions have interpreted its numeric value as seconds since v1.1.4. Renaming or multiplying existing stored values would change current behavior; the UI, documentation, and regression tests therefore lock the released seconds interpretation while preserving the old storage key.
 
 Temperature-unit migration behavior:
 

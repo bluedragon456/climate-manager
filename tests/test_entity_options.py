@@ -34,11 +34,17 @@ from custom_components.climate_manager.const import (  # noqa: E402
     CONF_GUEST_ENTITY,
     CONF_OUTDOOR_TEMP_ENTITY,
     CONF_OVERRIDE_ENTITY,
+    CONF_PRE_ARRIVAL_ENTITY,
     CONF_SEASON_ENTITY,
     CONF_SLEEP_SCHEDULE_ENTITY,
     CONF_TEMPERATURE_UNIT_MODE,
     CONF_THERMOSTAT_ENTITY,
     CONF_WINDOWS_ENTITY,
+    CONF_WINDOWS_SAFETY_HYSTERESIS,
+    CONF_WINDOWS_SAFETY_MAXIMUM_BACKOFF_MINUTES,
+    CONF_WINDOWS_SAFETY_MAX_INDOOR_TEMPERATURE,
+    CONF_WINDOWS_SAFETY_MIN_INDOOR_TEMPERATURE,
+    CONF_WINDOWS_SAFETY_OVERRIDE_ENABLED,
     HVAC_PREF_COOL,
     PROFILE_HOME,
     TEMPERATURE_UNIT_MODE_CELSIUS,
@@ -55,6 +61,7 @@ ENTITY_ATTRIBUTES = {
     CONF_OVERRIDE_ENTITY: "override_entity",
     CONF_WINDOWS_ENTITY: "windows_entity",
     CONF_SEASON_ENTITY: "season_entity",
+    CONF_PRE_ARRIVAL_ENTITY: "pre_arrival_entity",
 }
 ENTITY_DOMAINS = {
     CONF_THERMOSTAT_ENTITY: "climate",
@@ -65,6 +72,7 @@ ENTITY_DOMAINS = {
     CONF_OVERRIDE_ENTITY: "input_boolean",
     CONF_WINDOWS_ENTITY: "binary_sensor",
     CONF_SEASON_ENTITY: ["input_text", "sensor", "select"],
+    CONF_PRE_ARRIVAL_ENTITY: ["binary_sensor", "input_boolean"],
 }
 OLD_ENTITIES = {
     CONF_THERMOSTAT_ENTITY: "climate.old",
@@ -75,6 +83,7 @@ OLD_ENTITIES = {
     CONF_OVERRIDE_ENTITY: "input_boolean.old_override",
     CONF_WINDOWS_ENTITY: "binary_sensor.old_windows",
     CONF_SEASON_ENTITY: "sensor.old_season",
+    CONF_PRE_ARRIVAL_ENTITY: "input_boolean.old_pre_arrival",
 }
 NEW_ENTITIES = {
     CONF_THERMOSTAT_ENTITY: "climate.new",
@@ -85,6 +94,7 @@ NEW_ENTITIES = {
     CONF_OVERRIDE_ENTITY: "input_boolean.new_override",
     CONF_WINDOWS_ENTITY: "binary_sensor.new_windows",
     CONF_SEASON_ENTITY: "select.new_season",
+    CONF_PRE_ARRIVAL_ENTITY: "binary_sensor.new_pre_arrival",
 }
 NEW_EDITABLE_ENTITIES = {
     key: value
@@ -291,6 +301,58 @@ class EntityOptionsTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(initial.curve_weight_home, 1.0)
         self.assertEqual(reloaded.curve_weight_home, 0.5)
+
+    def test_existing_entry_defaults_window_safety_to_disabled(self) -> None:
+        config = integration._build_manager_config(
+            make_hass(),
+            make_entry(data=OLD_ENTITIES),
+        )
+
+        self.assertFalse(config.windows_safety_override_enabled)
+        self.assertEqual(config.windows_safety_maximum_backoff_minutes, 240)
+        self.assertEqual(config.windows_safety_min_indoor_temperature, 50.0)
+        self.assertEqual(config.windows_safety_max_indoor_temperature, 80.0)
+        self.assertEqual(config.windows_safety_hysteresis, 2.0)
+
+    async def test_window_safety_options_round_trip_to_runtime_config(self) -> None:
+        flow = ClimateManagerOptionsFlow(make_entry(data=OLD_ENTITIES))
+        flow.hass = make_hass()
+        result = await flow.async_step_window_safety(
+            {
+                CONF_WINDOWS_SAFETY_OVERRIDE_ENABLED: True,
+                CONF_WINDOWS_SAFETY_MAXIMUM_BACKOFF_MINUTES: 360,
+                CONF_WINDOWS_SAFETY_MIN_INDOOR_TEMPERATURE: 48.0,
+                CONF_WINDOWS_SAFETY_MAX_INDOOR_TEMPERATURE: 84.0,
+                CONF_WINDOWS_SAFETY_HYSTERESIS: 3.0,
+            }
+        )
+        config = integration._build_manager_config(
+            make_hass(),
+            make_entry(data=OLD_ENTITIES, options=result["data"]),
+        )
+
+        self.assertTrue(config.windows_safety_override_enabled)
+        self.assertEqual(config.windows_safety_maximum_backoff_minutes, 360)
+        self.assertEqual(config.windows_safety_min_indoor_temperature, 48.0)
+        self.assertEqual(config.windows_safety_max_indoor_temperature, 84.0)
+        self.assertEqual(config.windows_safety_hysteresis, 3.0)
+
+    async def test_window_safety_options_reject_overlapping_envelope(self) -> None:
+        flow = ClimateManagerOptionsFlow(make_entry(data=OLD_ENTITIES))
+        flow.hass = make_hass()
+
+        result = await flow.async_step_window_safety(
+            {
+                CONF_WINDOWS_SAFETY_OVERRIDE_ENABLED: True,
+                CONF_WINDOWS_SAFETY_MAXIMUM_BACKOFF_MINUTES: 240,
+                CONF_WINDOWS_SAFETY_MIN_INDOOR_TEMPERATURE: 70.0,
+                CONF_WINDOWS_SAFETY_MAX_INDOOR_TEMPERATURE: 72.0,
+                CONF_WINDOWS_SAFETY_HYSTERESIS: 2.0,
+            }
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["errors"], {"base": "invalid_window_safety_envelope"})
 
     async def test_reload_entry_uses_home_assistant_config_entry_reload(self) -> None:
         calls = []

@@ -14,7 +14,8 @@
           "guest_entity": "Guest mode boolean",
           "override_entity": "Manual climate lock boolean",
           "windows_entity": "Window or door open sensor",
-          "season_entity": "Season source"
+          "season_entity": "Season source",
+          "pre_arrival_entity": "Heading home request"
         },
         "data_description": {
           "temperature_unit_mode": "New installs default to the Home Assistant system unit. Existing installs without this setting continue using Fahrenheit until changed."
@@ -32,6 +33,7 @@
           "transition_boost": "Transition Auto and outdoor boost",
           "safety_limits": "Safety, away, and limits",
           "manual_windows": "Manual override and windows",
+          "window_safety": "Window temperature safety override",
           "comfort_curve": "Advanced comfort curve",
           "legacy": "Legacy explicit Heat/Cool tuning",
           "diagnostics": "Diagnostics",
@@ -48,7 +50,8 @@
           "guest_entity": "Guest mode boolean",
           "override_entity": "Manual climate lock boolean",
           "windows_entity": "Window or door open sensor",
-          "season_entity": "Season source"
+          "season_entity": "Season source",
+          "pre_arrival_entity": "Heading home request"
         }
       },
       "simple_comfort": {
@@ -103,6 +106,17 @@
           "windows_action": "Windows action",
           "windows_open_delay_minutes": "Window or door delay before backoff in minutes",
           "windows_restore_delay_minutes": "Window or door close buffer in seconds"
+        }
+      },
+      "window_safety": {
+        "title": "Window temperature safety override",
+        "description": "Optional independent indoor-temperature protection while window backoff remains active. Disabled by default; enabling it may temporarily heat or cool regardless of the stored HVAC preference without changing that preference.",
+        "data": {
+          "windows_safety_override_enabled": "Enable window temperature safety override",
+          "windows_safety_maximum_backoff_minutes": "Maximum window backoff before safety envelope in minutes",
+          "windows_safety_min_indoor_temperature": "Minimum safe indoor temperature",
+          "windows_safety_max_indoor_temperature": "Maximum safe indoor temperature",
+          "windows_safety_hysteresis": "Safety recovery hysteresis"
         }
       },
       "comfort_curve": {
@@ -164,6 +178,9 @@
       }
     }
   },
+  "error": {
+    "invalid_window_safety_envelope": "The minimum plus hysteresis must be lower than the maximum minus hysteresis."
+  },
   "selector": {
     "hvac_preference": {
       "options": {
@@ -211,6 +228,34 @@
       "status": {"name": "Status"},
       "override_until": {"name": "Override until"},
       "windows_backoff_until": {"name": "Windows backoff until"},
+      "windows_open_since": {"name": "Windows open since"},
+      "windows_closed_since": {"name": "Windows closed since"},
+      "window_timer_expected_at": {"name": "Window timer expected at"},
+      "windows_raw_state": {"name": "Windows raw state"},
+      "windows_protection_state": {"name": "Windows protection state"},
+      "window_timer_kind": {"name": "Window timer kind"},
+      "last_window_timer_reason": {"name": "Last window timer reason"},
+      "windows_action": {"name": "Windows action"},
+      "window_safety_state": {"name": "Window safety state"},
+      "window_safety_activation_reason": {"name": "Window safety activation reason"},
+      "window_safety_activated_at": {"name": "Window safety activated at"},
+      "window_safety_cleared_at": {"name": "Window safety cleared at"},
+      "window_safety_clear_reason": {"name": "Window safety clear reason"},
+      "window_safety_deadline": {"name": "Window safety deadline"},
+      "window_safety_min_indoor_temperature": {"name": "Window safety minimum indoor temperature"},
+      "window_safety_max_indoor_temperature": {"name": "Window safety maximum indoor temperature"},
+      "window_safety_hysteresis": {"name": "Window safety hysteresis"},
+      "thermostat_current_temperature": {"name": "Thermostat current temperature"},
+      "thermostat_reported_target": {"name": "Thermostat reported target"},
+      "thermostat_reported_target_low": {"name": "Thermostat reported target low"},
+      "thermostat_reported_target_high": {"name": "Thermostat reported target high"},
+      "thermostat_hvac_action": {"name": "Thermostat HVAC action"},
+      "last_commanded_target": {"name": "Last commanded target"},
+      "last_commanded_target_low": {"name": "Last commanded target low"},
+      "last_commanded_target_high": {"name": "Last commanded target high"},
+      "last_command_time": {"name": "Last command time"},
+      "pre_arrival_state": {"name": "Heading home request state"},
+      "pre_arrival_blocked_reason": {"name": "Heading home blocked reason"},
       "last_reason": {"name": "Last reason"},
       "last_action": {"name": "Last action"}
     },
@@ -218,7 +263,13 @@
       "smart_control_active": {"name": "Smart control active"},
       "manual_override_active": {"name": "Manual override active"},
       "windows_backoff_active": {"name": "Windows backoff active"},
-      "fail_safe_active": {"name": "Fail-safe active"}
+      "window_temperature_safety_override_enabled": {"name": "Window temperature safety override enabled"},
+      "window_temperature_safety_override_active": {"name": "Window temperature safety override active"},
+      "window_temperature_safety_override_blocked": {"name": "Window temperature safety override blocked"},
+      "fail_safe_active": {"name": "Fail-safe active"},
+      "window_timer_scheduled": {"name": "Window timer scheduled"},
+      "pre_arrival_active": {"name": "Heading home active"},
+      "above_cooling_target_while_idle": {"name": "Above cooling target while idle"}
     },
     "button": {
       "recalculate_now": {"name": "Recalculate now"},

@@ -13,6 +13,7 @@ from .const import (
     PROFILE_AWAY,
     PROFILE_GUEST,
     PROFILE_HOME,
+    PROFILE_PRE_ARRIVAL,
     PROFILE_SLEEP,
     TEMPERATURE_UNIT_MODE_CELSIUS,
     TEMPERATURE_UNIT_MODE_FAHRENHEIT,
@@ -157,7 +158,7 @@ def nearly_equal(left: float | None, right: float | None, threshold: float) -> b
 
 def curve_weight_for_profile(config: ManagerConfig, profile: str, *, cooling: bool = False) -> float:
     """Get curve weight for a profile."""
-    if profile == PROFILE_HOME:
+    if profile in {PROFILE_HOME, PROFILE_PRE_ARRIVAL}:
         return config.cool_curve_weight_home if cooling else config.curve_weight_home
     if profile == PROFILE_SLEEP:
         return config.cool_curve_weight_sleep if cooling else config.curve_weight_sleep
