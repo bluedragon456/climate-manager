@@ -99,10 +99,12 @@ class RuntimeState:
     outdoor_boost_state: str = "none"
     active_control_reason: str | None = None
     manual_override_active: bool = False
+    manual_override_started_at: datetime | None = None
     manual_override_until: datetime | None = None
     manual_hold: bool = False
     windows_backoff_active: bool = False
     windows_backoff_until: datetime | None = None
+    windows_backoff_activated_at: datetime | None = None
     windows_safety_override_active: bool = False
     windows_safety_activated_at: datetime | None = None
     windows_safety_activation_reason: str | None = None

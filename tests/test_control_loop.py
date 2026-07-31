@@ -96,7 +96,11 @@ class ControlLoopTests(unittest.IsolatedAsyncioTestCase):
         manager._handle_state_change(event)
         await asyncio.sleep(0)
 
-        manager.async_recalculate.assert_awaited_once_with("state_change:climate.test")
+        manager.async_recalculate.assert_awaited_once()
+        self.assertEqual(
+            manager.async_recalculate.await_args.args[0],
+            "state_change:climate.test",
+        )
 
     async def test_idle_above_accepted_cooling_target_is_diagnosed_without_write_loop(self) -> None:
         manager = self.make_manager(
@@ -163,9 +167,56 @@ class ControlLoopTests(unittest.IsolatedAsyncioTestCase):
             manager._detect_manual_change(
                 "state_change:climate.test",
                 ThermostatSnapshot("cool", 70.0, None, None, 75.0, True),
+                previous_thermostat=ThermostatSnapshot(
+                    "cool",
+                    70.0,
+                    None,
+                    None,
+                    74.0,
+                    True,
+                ),
             )
 
         self.assertFalse(manager.runtime.manual_override_active)
+
+    def test_real_manual_change_within_grace_creates_override(self) -> None:
+        manager = self.make_manager(
+            SimpleNamespace(
+                state="cool",
+                attributes={"temperature": 67.0, "current_temperature": 75.0},
+            )
+        )
+        command_time = datetime(2026, 7, 20, 10, 0, tzinfo=timezone.utc)
+        manager._last_command_time = command_time
+        manager._last_command_snapshot = {
+            "hvac_mode": "cool",
+            "temperature": 69.0,
+            "target_temp_low": None,
+            "target_temp_high": None,
+        }
+
+        with patch(
+            "custom_components.climate_manager.manager.now",
+            return_value=command_time + timedelta(seconds=2),
+        ):
+            manager._detect_manual_change(
+                "state_change:climate.test",
+                ThermostatSnapshot("cool", 67.0, None, None, 75.0, True),
+                previous_thermostat=ThermostatSnapshot(
+                    "cool",
+                    69.0,
+                    None,
+                    None,
+                    75.0,
+                    True,
+                ),
+            )
+
+        self.assertTrue(manager.runtime.manual_override_active)
+        self.assertEqual(
+            manager.runtime.manual_override_started_at,
+            command_time + timedelta(seconds=2),
+        )
 
     def test_real_manual_change_after_grace_still_creates_override(self) -> None:
         manager = self.make_manager(
@@ -190,6 +241,14 @@ class ControlLoopTests(unittest.IsolatedAsyncioTestCase):
             manager._detect_manual_change(
                 "state_change:climate.test",
                 ThermostatSnapshot("cool", 72.0, None, None, 75.0, True),
+                previous_thermostat=ThermostatSnapshot(
+                    "cool",
+                    69.0,
+                    None,
+                    None,
+                    75.0,
+                    True,
+                ),
             )
 
         self.assertTrue(manager.runtime.manual_override_active)

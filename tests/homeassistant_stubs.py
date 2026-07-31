@@ -135,7 +135,9 @@ def install_homeassistant_stubs() -> None:
     selector.BooleanSelector = BooleanSelector
     storage.Store = Store
     dt.utcnow = lambda: datetime(2026, 1, 1, tzinfo=timezone.utc)
-    dt.parse_datetime = lambda value: value
+    dt.parse_datetime = lambda value: (
+        value if isinstance(value, datetime) else datetime.fromisoformat(value)
+    )
 
     homeassistant.config_entries = config_entries
     helpers.config_validation = config_validation

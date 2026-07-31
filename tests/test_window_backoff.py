@@ -336,24 +336,48 @@ class WindowBackoffTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(manager._resolve_profile(), PROFILE_SENSORS_OPEN)
 
-    async def test_manual_change_is_canceled_immediately_when_window_policy_requires_it(self) -> None:
+    async def test_override_active_before_window_backoff_is_canceled_by_policy(self) -> None:
         manager = self.make_manager(window_state="on")
+        manager.runtime.windows_open_since = self.clock.current - timedelta(minutes=20)
+        manager.runtime.windows_backoff_until = self.clock.current - timedelta(minutes=5)
+        manager.runtime.windows_backoff_active = True
+        manager.runtime.manual_override_active = True
+        manager.runtime.manual_hold = True
+        manager.runtime.manual_override_started_at = self.clock.current - timedelta(minutes=10)
+
+        await manager.async_recalculate("service")
+
+        self.assertFalse(manager.runtime.manual_override_active)
+        self.assertIsNone(manager.runtime.manual_override_started_at)
+        self.assertEqual(manager.runtime.active_profile, PROFILE_SENSORS_OPEN)
+
+    async def test_manual_change_during_active_window_backoff_is_not_reverted(self) -> None:
+        manager = self.make_manager(window_state="on", thermostat_state="off")
         manager.runtime.windows_open_since = self.clock.current - timedelta(minutes=20)
         manager.runtime.windows_backoff_until = self.clock.current - timedelta(minutes=5)
         manager.runtime.windows_backoff_active = True
         manager._last_command_snapshot = {
             "hvac_mode": "off",
-            "temperature": None,
+            "temperature": 70.0,
             "target_temp_low": None,
             "target_temp_high": None,
         }
-        manager._last_command_time = self.clock.current - timedelta(minutes=1)
+        manager._last_command_time = self.clock.current - timedelta(seconds=2)
+        previous = manager._thermostat_snapshot()
         manager.hass.states.states["climate.test"].state = "cool"
+        manager.hass.states.states["climate.test"].attributes["temperature"] = 67.0
+        current = manager._thermostat_snapshot()
 
-        await manager.async_recalculate("state_change:climate.test")
+        await manager.async_recalculate(
+            "state_change:climate.test",
+            thermostat_event=(previous, current, self.clock.current),
+        )
 
-        self.assertFalse(manager.runtime.manual_override_active)
-        self.assertEqual(manager.runtime.active_profile, PROFILE_SENSORS_OPEN)
+        self.assertTrue(manager.runtime.manual_override_active)
+        self.assertEqual(manager.runtime.manual_override_started_at, self.clock.current)
+        self.assertEqual(manager.runtime.active_profile, PROFILE_MANUAL_OVERRIDE)
+        self.assertIsNone(manager.runtime.desired_hvac_mode)
+        self.assertEqual(manager.hass.services.calls, [])
 
     async def test_manual_override_can_outrank_windows_when_cancel_option_is_disabled(self) -> None:
         manager = self.make_manager(

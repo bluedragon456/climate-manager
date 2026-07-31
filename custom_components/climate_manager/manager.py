@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from datetime import timedelta
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from math import isclose
 from typing import Any
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
@@ -75,6 +77,22 @@ SEASONAL_BASELINES: dict[str, tuple[float, float]] = {
     SEASON_AUTUMN: (67.0, 72.0),
 }
 NEUTRAL_HOME_BASELINE = (69.0, 73.0)
+
+
+@dataclass(slots=True)
+class PendingThermostatCommand:
+    """Short-lived thermostat values expected from one integration command."""
+
+    source: str
+    expected_values: dict[str, float | str | None]
+    issued_at: datetime
+    expires_at: datetime
+    remaining_fields: set[str] = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.remaining_fields = set(self.expected_values)
+
+
 class ClimateManager:
     """Main runtime manager."""
     def __init__(self, hass: HomeAssistant, entry_id: str, config: ManagerConfig) -> None:
@@ -97,6 +115,8 @@ class ClimateManager:
         self.last_action: str | None = None
         self._last_command_snapshot: dict[str, float | str | None] | None = None
         self._last_command_time: Any = None
+        self._pending_thermostat_commands: list[PendingThermostatCommand] = []
+        self._last_thermostat_event_time: datetime | None = None
         self._active_manual_override_snapshot: dict[str, float | str | None] | None = None
     @property
     def temperature_unit(self) -> str:
@@ -173,6 +193,19 @@ class ClimateManager:
         )
         if entity_id == self.config.windows_entity:
             self._schedule_window_recalc_if_needed()
+        if entity_id == self.config.thermostat_entity:
+            thermostat_event = (
+                self._thermostat_snapshot_from_state(old_state),
+                self._thermostat_snapshot_from_state(new_state),
+                self._state_event_time(event, new_state),
+            )
+            self.hass.async_create_task(
+                self.async_recalculate(
+                    f"state_change:{entity_id}",
+                    thermostat_event=thermostat_event,
+                )
+            )
+            return
         self.hass.async_create_task(self.async_recalculate(f"state_change:{entity_id}"))
     @callback
     def _cancel_window_timer(self) -> None:
@@ -305,7 +338,17 @@ class ClimateManager:
         """Recalculate when an override timer expires."""
         self._override_timer_handle = None
         await self.async_recalculate("override_timer")
-    async def async_recalculate(self, reason: str) -> None:
+    async def async_recalculate(
+        self,
+        reason: str,
+        *,
+        thermostat_event: tuple[
+            ThermostatSnapshot,
+            ThermostatSnapshot,
+            datetime,
+        ]
+        | None = None,
+    ) -> None:
         """Main control loop."""
         async with self._lock:
             self.last_reason = reason
@@ -338,7 +381,16 @@ class ClimateManager:
                 self._notify_subscribers()
                 return
             if reason == "startup" or reason.startswith(f"state_change:{self.config.thermostat_entity}"):
-                self._detect_manual_change(reason, thermostat)
+                if thermostat_event is not None:
+                    event_previous, event_current, event_time = thermostat_event
+                    self._detect_manual_change(
+                        reason,
+                        event_current,
+                        previous_thermostat=event_previous,
+                        event_time=event_time,
+                    )
+                else:
+                    self._detect_manual_change(reason, thermostat)
                 # A thermostat change can create a manual override. Apply window
                 # cancellation policy in the same control pass, not one event later.
                 self._refresh_override_state()
@@ -380,14 +432,16 @@ class ClimateManager:
             expires = self.runtime.manual_override_until
             if expires and current >= expires:
                 _LOGGER.info("Manual override expired for %s at %s", self.entry_id, expires.isoformat())
-                self.runtime.manual_override_active = False
-                self.runtime.manual_override_until = None
-                self._active_manual_override_snapshot = None
+                self._clear_manual_override()
         if self.runtime.manual_override_active:
             if self.config.cancel_override_on_away and state_is_on(self.hass, self.config.away_entity):
                 _LOGGER.debug("Canceling override because away mode is on")
                 self._clear_manual_override()
-            elif self.config.cancel_override_on_windows and self._windows_backoff_active():
+            elif (
+                self.config.cancel_override_on_windows
+                and self._windows_backoff_active()
+                and not self._manual_override_started_during_current_window_backoff()
+            ):
                 _LOGGER.debug("Canceling override because windows backoff activated")
                 self._clear_manual_override()
             elif self.config.cancel_override_on_sleep and state_is_on(self.hass, self.config.sleep_schedule_entity):
@@ -1033,12 +1087,15 @@ class ClimateManager:
         if desired_mode == "heat_cool":
             return target_heat, target_cool
         return None, None
-    def _thermostat_snapshot(self) -> ThermostatSnapshot:
-        state = self.hass.states.get(self.config.thermostat_entity)
-        if state is None or state.state in {"unavailable", "unknown"}:
+    def _thermostat_snapshot_from_state(self, state: Any) -> ThermostatSnapshot:
+        """Build a thermostat snapshot from a Home Assistant state object."""
+        state_value = None if state is None else getattr(state, "state", None)
+        if state_value is None or state_value in {"unavailable", "unknown"}:
             return ThermostatSnapshot(None, None, None, None, None, False)
+        attributes = getattr(state, "attributes", None) or {}
+
         def attr_float(key: str) -> float | None:
-            value = state.attributes.get(key)
+            value = attributes.get(key)
             if value is None:
                 return None
             try:
@@ -1046,13 +1103,27 @@ class ClimateManager:
             except (TypeError, ValueError):
                 return None
         return ThermostatSnapshot(
-            hvac_mode=state.state,
+            hvac_mode=state_value,
             target_temp=attr_float("temperature"),
             target_temp_low=attr_float("target_temp_low"),
             target_temp_high=attr_float("target_temp_high"),
             current_temperature=attr_float("current_temperature"),
             available=True,
         )
+
+    def _state_event_time(self, event: Any, new_state: Any) -> datetime:
+        """Return the most trustworthy timestamp available for a state event."""
+        event_time = getattr(event, "time_fired", None)
+        if isinstance(event_time, datetime):
+            return event_time
+        state_time = getattr(new_state, "last_updated", None)
+        if isinstance(state_time, datetime):
+            return state_time
+        return now()
+
+    def _thermostat_snapshot(self) -> ThermostatSnapshot:
+        state = self.hass.states.get(self.config.thermostat_entity)
+        return self._thermostat_snapshot_from_state(state)
     def _manual_detection_snapshot(self, thermostat: ThermostatSnapshot) -> dict[str, float | str | None]:
         # Some thermostats keep a stale primary "temperature" attribute while in heat_cool.
         # Ignore it there and compare only the active low/high range.
@@ -1141,52 +1212,6 @@ class ClimateManager:
                 )
             )
         )
-    def _manual_snapshot_field_changes(
-        self,
-        current_snapshot: dict[str, float | str | None],
-        baseline_snapshot: dict[str, float | str | None],
-    ) -> dict[str, bool]:
-        return {
-            "hvac_mode": current_snapshot.get("hvac_mode") != baseline_snapshot.get("hvac_mode"),
-            "temperature": not nearly_equal(
-                current_snapshot.get("temperature"),
-                baseline_snapshot.get("temperature"),
-                self.config.temp_change_threshold,
-            ),
-            "target_temp_low": not nearly_equal(
-                current_snapshot.get("target_temp_low"),
-                baseline_snapshot.get("target_temp_low"),
-                self.config.temp_change_threshold,
-            ),
-            "target_temp_high": not nearly_equal(
-                current_snapshot.get("target_temp_high"),
-                baseline_snapshot.get("target_temp_high"),
-                self.config.temp_change_threshold,
-            ),
-        }
-    def _meaningful_snapshot_change(
-        self,
-        current_snapshot: dict[str, float | str | None],
-        baseline_snapshot: dict[str, float | str | None],
-    ) -> tuple[bool, bool]:
-        current_mode = current_snapshot.get("hvac_mode")
-        baseline_mode = baseline_snapshot.get("hvac_mode")
-        mode_changed = current_mode is not None and baseline_mode is not None and current_mode != baseline_mode
-        temp_changed = False
-        if current_mode == "heat_cool" or baseline_mode == "heat_cool":
-            temp_changed = not self.is_equivalent_heat_cool_range(
-                current_snapshot.get("target_temp_low"),
-                current_snapshot.get("target_temp_high"),
-                baseline_snapshot.get("target_temp_low"),
-                baseline_snapshot.get("target_temp_high"),
-            )
-        elif current_mode not in {None, STATE_OFF} or baseline_mode not in {None, STATE_OFF}:
-            temp_changed = not nearly_equal(
-                current_snapshot.get("temperature"),
-                baseline_snapshot.get("temperature"),
-                self.config.temp_change_threshold,
-            )
-        return mode_changed, temp_changed
     def _command_snapshot_base(self) -> dict[str, float | str | None]:
         if self._last_command_snapshot is not None and self._last_command_time is not None:
             settle_window = self._last_command_time + timedelta(seconds=self._self_echo_settle_seconds())
@@ -1204,6 +1229,7 @@ class ClimateManager:
         temperature: float | None | object = _UNSET,
         target_temp_low: float | None | object = _UNSET,
         target_temp_high: float | None | object = _UNSET,
+        command_time: datetime | None = None,
     ) -> None:
         snapshot = self._command_snapshot_base()
         if hvac_mode is not _UNSET:
@@ -1215,7 +1241,7 @@ class ClimateManager:
         if target_temp_high is not _UNSET:
             snapshot["target_temp_high"] = target_temp_high
         self._last_command_snapshot = snapshot
-        self._last_command_time = now()
+        self._last_command_time = command_time or now()
         self._log_manual_diagnostics(
             "Stored command snapshot for %s: source=%s snapshot=%s command_time=%s",
             self.entry_id,
@@ -1223,6 +1249,145 @@ class ClimateManager:
             self._last_command_snapshot,
             self._last_command_time.isoformat(),
         )
+
+    def _register_pending_thermostat_command(
+        self,
+        source: str,
+        expected_values: dict[str, float | str | None],
+        *,
+        issued_at: datetime | None = None,
+    ) -> PendingThermostatCommand:
+        """Register exact values expected from a climate service call."""
+        command_time = issued_at or now()
+        self._expire_pending_thermostat_commands(command_time)
+        command = PendingThermostatCommand(
+            source=source,
+            expected_values=dict(expected_values),
+            issued_at=command_time,
+            expires_at=command_time
+            + timedelta(seconds=self._self_echo_settle_seconds()),
+        )
+        self._pending_thermostat_commands.append(command)
+        return command
+
+    def _remove_pending_thermostat_command(
+        self,
+        command: PendingThermostatCommand,
+    ) -> None:
+        """Remove a command expectation when its service call fails."""
+        self._pending_thermostat_commands = [
+            pending
+            for pending in self._pending_thermostat_commands
+            if pending is not command
+        ]
+
+    def _event_field_changes(
+        self,
+        previous_snapshot: dict[str, float | str | None],
+        current_snapshot: dict[str, float | str | None],
+    ) -> dict[str, bool]:
+        """Return material user-control changes carried by one state event."""
+        current_mode = current_snapshot.get("hvac_mode")
+        return {
+            "hvac_mode": (
+                previous_snapshot.get("hvac_mode") is not None
+                and current_snapshot.get("hvac_mode") is not None
+                and previous_snapshot.get("hvac_mode")
+                != current_snapshot.get("hvac_mode")
+            ),
+            "temperature": (
+                current_mode != "heat_cool"
+                and not nearly_equal(
+                    previous_snapshot.get("temperature"),
+                    current_snapshot.get("temperature"),
+                    self.config.temp_change_threshold,
+                )
+            ),
+            "target_temp_low": (
+                current_mode == "heat_cool"
+                and not nearly_equal(
+                    previous_snapshot.get("target_temp_low"),
+                    current_snapshot.get("target_temp_low"),
+                    self.config.temp_change_threshold,
+                )
+            ),
+            "target_temp_high": (
+                current_mode == "heat_cool"
+                and not nearly_equal(
+                    previous_snapshot.get("target_temp_high"),
+                    current_snapshot.get("target_temp_high"),
+                    self.config.temp_change_threshold,
+                )
+            ),
+        }
+
+    def _expire_pending_thermostat_commands(self, reference_time: datetime) -> None:
+        """Drop fully consumed or expired command expectations."""
+        self._pending_thermostat_commands = [
+            command
+            for command in self._pending_thermostat_commands
+            if command.remaining_fields and command.expires_at >= reference_time
+        ]
+
+    def _pending_value_matches(
+        self,
+        field_name: str,
+        observed: float | str | None,
+        expected: float | str | None,
+    ) -> bool:
+        if field_name == "hvac_mode":
+            return observed == expected
+        if observed is None or expected is None:
+            return observed is expected
+        return isclose(
+            float(observed),
+            float(expected),
+            rel_tol=0.0,
+            abs_tol=1e-6,
+        )
+
+    def _consume_pending_echo(
+        self,
+        thermostat_snapshot: dict[str, float | str | None],
+        field_changes: dict[str, bool],
+        event_time: datetime,
+    ) -> bool:
+        """Consume pending fields only when every changed value matches exactly."""
+        changed_fields = [name for name, changed in field_changes.items() if changed]
+        if not changed_fields:
+            return False
+        matches: list[tuple[PendingThermostatCommand, str]] = []
+        for field_name in changed_fields:
+            observed = thermostat_snapshot.get(field_name)
+            match = next(
+                (
+                    command
+                    for command in reversed(self._pending_thermostat_commands)
+                    if command.issued_at <= event_time <= command.expires_at
+                    and field_name in command.remaining_fields
+                    and self._pending_value_matches(
+                        field_name,
+                        observed,
+                        command.expected_values[field_name],
+                    )
+                ),
+                None,
+            )
+            if match is None:
+                return False
+            matches.append((match, field_name))
+        for command, field_name in matches:
+            command.remaining_fields.discard(field_name)
+        self._expire_pending_thermostat_commands(event_time)
+        return True
+
+    def _discard_superseded_pending_commands(self, event_time: datetime) -> None:
+        """Prevent a manual/external event from inheriting older command ownership."""
+        self._pending_thermostat_commands = [
+            command
+            for command in self._pending_thermostat_commands
+            if command.issued_at > event_time
+        ]
     def _log_manual_detection_event(
         self,
         *,
@@ -1279,63 +1444,47 @@ class ClimateManager:
             override_activated,
             outcome,
         )
-    def _detect_manual_change(self, reason: str, thermostat: ThermostatSnapshot) -> None:
+    def _detect_manual_change(
+        self,
+        reason: str,
+        thermostat: ThermostatSnapshot,
+        *,
+        previous_thermostat: ThermostatSnapshot | None = None,
+        event_time: datetime | None = None,
+    ) -> None:
         thermostat_snapshot = self._manual_detection_snapshot(thermostat)
+        previous_snapshot = (
+            None
+            if previous_thermostat is None or not previous_thermostat.available
+            else self._manual_detection_snapshot(previous_thermostat)
+        )
         commanded_snapshot = self._last_command_snapshot
         command_time = self._last_command_time
-        heat_cool_equivalent = None
-        if commanded_snapshot is not None and thermostat_snapshot.get("hvac_mode") == "heat_cool":
-            normalized_low, normalized_high = self.normalize_heat_cool_range(
-                commanded_snapshot.get("target_temp_low"),
-                commanded_snapshot.get("target_temp_high"),
-            )
-            heat_cool_equivalent = self.is_equivalent_heat_cool_range(
+        heat_cool_equivalent = (
+            None
+            if commanded_snapshot is None
+            else self.is_equivalent_heat_cool_range(
                 thermostat_snapshot.get("target_temp_low"),
                 thermostat_snapshot.get("target_temp_high"),
                 commanded_snapshot.get("target_temp_low"),
                 commanded_snapshot.get("target_temp_high"),
             )
-            self._log_manual_diagnostics(
-                "Heat/cool manual detection comparison for %s: observed_range=(%s, %s) expected_range=(%s, %s) normalized_expected_range=(%s, %s) equivalent_device_normalization=%s",
-                self.entry_id,
-                thermostat_snapshot.get("target_temp_low"),
-                thermostat_snapshot.get("target_temp_high"),
-                commanded_snapshot.get("target_temp_low"),
-                commanded_snapshot.get("target_temp_high"),
-                normalized_low,
-                normalized_high,
-                heat_cool_equivalent,
-            )
-        if commanded_snapshot is None or command_time is None:
-            self._log_manual_detection_event(
-                reason=reason,
-                thermostat_snapshot=thermostat_snapshot,
-                commanded_snapshot=commanded_snapshot,
-                command_time=command_time,
-                grace_until=None,
-                settle_until=None,
-                in_grace_window=False,
-                in_settle_window=False,
-                mode_changed=False,
-                temp_changed=False,
-                override_activated=False,
-                field_changes=None,
-                heat_cool_equivalent=heat_cool_equivalent,
-                outcome="skipped:no_in_memory_command_baseline",
-            )
-            self._log_manual_diagnostics(
-                "Manual detection skipped for %s because no in-memory command baseline is available",
-                reason,
-            )
-            return
-        current_time = now()
-        grace_window = command_time + timedelta(seconds=self.config.manual_grace_seconds)
-        settle_window = command_time + timedelta(seconds=self._self_echo_settle_seconds())
-        in_grace_window = current_time <= grace_window
-        in_settle_window = current_time <= settle_window
-        field_changes = self._manual_snapshot_field_changes(thermostat_snapshot, commanded_snapshot)
-        mode_changed, temp_changed = self._meaningful_snapshot_change(thermostat_snapshot, commanded_snapshot)
-        if in_settle_window and self._manual_snapshot_matches(thermostat_snapshot, commanded_snapshot):
+        )
+        detected_at = event_time or now()
+        self._expire_pending_thermostat_commands(now())
+        grace_window = (
+            None
+            if command_time is None
+            else command_time + timedelta(seconds=self.config.manual_grace_seconds)
+        )
+        settle_window = (
+            None
+            if command_time is None
+            else command_time + timedelta(seconds=self._self_echo_settle_seconds())
+        )
+        in_grace_window = grace_window is not None and detected_at <= grace_window
+        in_settle_window = settle_window is not None and detected_at <= settle_window
+        if previous_snapshot is None or not thermostat.available:
             self._log_manual_detection_event(
                 reason=reason,
                 thermostat_snapshot=thermostat_snapshot,
@@ -1345,14 +1494,42 @@ class ClimateManager:
                 settle_until=settle_window,
                 in_grace_window=in_grace_window,
                 in_settle_window=in_settle_window,
-                mode_changed=mode_changed,
-                temp_changed=temp_changed,
+                mode_changed=False,
+                temp_changed=False,
                 override_activated=False,
-                field_changes=field_changes,
+                field_changes=None,
                 heat_cool_equivalent=heat_cool_equivalent,
-                outcome="ignored:self_echo",
+                outcome="skipped:no_event_change_baseline",
             )
             return
+        if (
+            self._last_thermostat_event_time is not None
+            and detected_at < self._last_thermostat_event_time
+        ):
+            self._log_manual_detection_event(
+                reason=reason,
+                thermostat_snapshot=thermostat_snapshot,
+                commanded_snapshot=commanded_snapshot,
+                command_time=command_time,
+                grace_until=grace_window,
+                settle_until=settle_window,
+                in_grace_window=in_grace_window,
+                in_settle_window=in_settle_window,
+                mode_changed=False,
+                temp_changed=False,
+                override_activated=False,
+                field_changes=None,
+                heat_cool_equivalent=heat_cool_equivalent,
+                outcome="ignored:stale_out_of_order_event",
+            )
+            return
+        self._last_thermostat_event_time = detected_at
+        field_changes = self._event_field_changes(previous_snapshot, thermostat_snapshot)
+        mode_changed = field_changes["hvac_mode"]
+        temp_changed = any(
+            field_changes[field_name]
+            for field_name in ("temperature", "target_temp_low", "target_temp_high")
+        )
         if not mode_changed and not temp_changed:
             self._log_manual_detection_event(
                 reason=reason,
@@ -1371,7 +1548,13 @@ class ClimateManager:
                 outcome="ignored:insignificant",
             )
             return
-        if in_grace_window:
+        backoff_activated_at = self.runtime.windows_backoff_activated_at
+        if (
+            self.runtime.windows_backoff_active
+            and backoff_activated_at is not None
+            and detected_at < backoff_activated_at
+        ):
+            self._discard_superseded_pending_commands(detected_at)
             self._log_manual_detection_event(
                 reason=reason,
                 thermostat_snapshot=thermostat_snapshot,
@@ -1386,15 +1569,39 @@ class ClimateManager:
                 override_activated=False,
                 field_changes=field_changes,
                 heat_cool_equivalent=heat_cool_equivalent,
-                outcome="ignored:grace_window",
+                outcome="ignored:event_predates_window_backoff_activation",
             )
             return
+        if self._consume_pending_echo(
+            thermostat_snapshot,
+            field_changes,
+            detected_at,
+        ):
+            self._log_manual_detection_event(
+                reason=reason,
+                thermostat_snapshot=thermostat_snapshot,
+                commanded_snapshot=commanded_snapshot,
+                command_time=command_time,
+                grace_until=grace_window,
+                settle_until=settle_window,
+                in_grace_window=in_grace_window,
+                in_settle_window=in_settle_window,
+                mode_changed=mode_changed,
+                temp_changed=temp_changed,
+                override_activated=False,
+                field_changes=field_changes,
+                heat_cool_equivalent=heat_cool_equivalent,
+                outcome="ignored:pending_command_echo",
+            )
+            return
+        self._discard_superseded_pending_commands(detected_at)
         manual_reason = "manual hvac mode change detected" if mode_changed else "manual temperature change detected"
         manual_behavior = self.config.manual_mode_behavior if mode_changed else self.config.manual_temp_behavior
         treated_as_manual_override = self._apply_manual_behavior(
             manual_behavior,
             manual_reason,
             thermostat_snapshot,
+            activated_at=detected_at,
         )
         self._log_manual_detection_event(
             reason=reason,
@@ -1417,6 +1624,8 @@ class ClimateManager:
         behavior: str,
         reason: str,
         detected_snapshot: dict[str, float | str | None] | None = None,
+        *,
+        activated_at: datetime | None = None,
     ) -> bool:
         if behavior == MANUAL_BEHAVIOR_IGNORE:
             _LOGGER.info("Ignoring manual behavior trigger for %s because behavior is ignore", self.entry_id)
@@ -1433,14 +1642,19 @@ class ClimateManager:
                 detected_snapshot,
             )
             return False
+        activation_time = activated_at or now()
         if behavior == MANUAL_BEHAVIOR_HOLD:
             self.runtime.manual_override_active = True
+            self.runtime.manual_override_started_at = activation_time
             self.runtime.manual_hold = True
             self.runtime.manual_override_until = None
         elif behavior == MANUAL_BEHAVIOR_TEMPORARY:
             self.runtime.manual_override_active = True
+            self.runtime.manual_override_started_at = activation_time
             self.runtime.manual_hold = False
-            self.runtime.manual_override_until = now() + timedelta(minutes=self.config.override_duration_minutes)
+            self.runtime.manual_override_until = activation_time + timedelta(
+                minutes=self.config.override_duration_minutes
+            )
         _LOGGER.info(
             "%s; behavior=%s override active=%s until=%s hold=%s",
             reason,
@@ -1451,8 +1665,20 @@ class ClimateManager:
         )
         self._active_manual_override_snapshot = dict(detected_snapshot) if detected_snapshot is not None else None
         return True
+
+    def _manual_override_started_during_current_window_backoff(self) -> bool:
+        """Return whether the user override was created after this backoff activated."""
+        started_at = self.runtime.manual_override_started_at
+        backoff_started_at = self.runtime.windows_backoff_activated_at
+        return bool(
+            started_at is not None
+            and backoff_started_at is not None
+            and started_at >= backoff_started_at
+        )
+
     def _clear_manual_override(self) -> None:
         self.runtime.manual_override_active = False
+        self.runtime.manual_override_started_at = None
         self.runtime.manual_override_until = None
         self.runtime.manual_hold = False
         self._active_manual_override_snapshot = None
@@ -1467,6 +1693,7 @@ class ClimateManager:
         self.runtime.windows_closed_since = None
         self.runtime.windows_backoff_until = None
         self.runtime.windows_backoff_active = False
+        self.runtime.windows_backoff_activated_at = None
         self._clear_window_safety_state("window_restore_completed")
     async def async_clear_override(self) -> None:
         """Clear a manual override and re-baseline manual detection."""
@@ -1500,31 +1727,29 @@ class ClimateManager:
     ) -> None:
         """Set a temporary override."""
         self.last_action = "set_temporary_override"
+        activated_at = now()
         self.runtime.manual_override_active = True
+        self.runtime.manual_override_started_at = activated_at
         self.runtime.manual_hold = False
-        self.runtime.manual_override_until = now() + timedelta(minutes=duration_minutes)
+        self.runtime.manual_override_until = activated_at + timedelta(minutes=duration_minutes)
         self._active_manual_override_snapshot = None
         if hvac_mode:
-            await self.hass.services.async_call(
-                "climate",
-                "set_hvac_mode",
-                {ATTR_ENTITY_ID: self.config.thermostat_entity, "hvac_mode": hvac_mode},
-                blocking=True,
-            )
+            await self._async_set_hvac_mode(hvac_mode)
         if target_temp is not None:
-            service_temp = round_temperature_for_unit(to_ha_temp(target_temp, self.temperature_unit), self.temperature_unit)
-            await self.hass.services.async_call(
-                "climate",
-                "set_temperature",
-                {ATTR_ENTITY_ID: self.config.thermostat_entity, "temperature": service_temp},
-                blocking=True,
-            )
+            await self._async_set_temperature(temperature=target_temp)
         await self.async_recalculate("set_temporary_override")
     def _windows_backoff_active(self) -> bool:
         if not self.config.windows_entity:
             self._clear_windows_backoff_state()
             return False
         current = now()
+        if (
+            self.runtime.windows_backoff_active
+            and self.runtime.windows_backoff_activated_at is None
+        ):
+            # Older stored runtime did not include an activation timestamp.
+            # Treat the first trustworthy observation as the activation point.
+            self.runtime.windows_backoff_activated_at = current
         entity_state = self.hass.states.get(self.config.windows_entity)
         raw_state = None if entity_state is None else entity_state.state
         open_delay = timedelta(minutes=self.config.windows_open_delay_minutes)
@@ -1534,7 +1759,12 @@ class ClimateManager:
                 self.runtime.windows_open_since = current
             self.runtime.windows_closed_since = None
             self.runtime.windows_backoff_until = self.runtime.windows_open_since + open_delay
+            was_active = self.runtime.windows_backoff_active
             self.runtime.windows_backoff_active = current >= self.runtime.windows_backoff_until
+            if self.runtime.windows_backoff_active and not was_active:
+                self.runtime.windows_backoff_activated_at = current
+            elif not self.runtime.windows_backoff_active:
+                self.runtime.windows_backoff_activated_at = None
             return self.runtime.windows_backoff_active
         if raw_state != STATE_OFF:
             # Unknown, unavailable, and missing states are not proof of closure.
@@ -1543,6 +1773,7 @@ class ClimateManager:
             return self.runtime.windows_backoff_active
         if self.runtime.windows_open_since is None:
             self.runtime.windows_backoff_until = None
+            self.runtime.windows_backoff_activated_at = None
             self.runtime.windows_closed_since = None
             self.runtime.windows_backoff_active = False
             return False
@@ -1612,13 +1843,27 @@ class ClimateManager:
     async def _async_set_hvac_mode(self, hvac_mode: str) -> None:
         self.last_action = f"set_hvac_mode:{hvac_mode}"
         _LOGGER.debug("Applying HVAC mode %s to %s", hvac_mode, self.config.thermostat_entity)
-        await self.hass.services.async_call(
-            "climate",
+        issued_at = now()
+        pending_command = self._register_pending_thermostat_command(
             "set_hvac_mode",
-            {ATTR_ENTITY_ID: self.config.thermostat_entity, "hvac_mode": hvac_mode},
-            blocking=True,
+            {"hvac_mode": hvac_mode},
+            issued_at=issued_at,
         )
-        self._store_command_snapshot("set_hvac_mode", hvac_mode=hvac_mode)
+        try:
+            await self.hass.services.async_call(
+                "climate",
+                "set_hvac_mode",
+                {ATTR_ENTITY_ID: self.config.thermostat_entity, "hvac_mode": hvac_mode},
+                blocking=True,
+            )
+        except Exception:
+            self._remove_pending_thermostat_command(pending_command)
+            raise
+        self._store_command_snapshot(
+            "set_hvac_mode",
+            hvac_mode=hvac_mode,
+            command_time=issued_at,
+        )
         self.runtime.last_commanded_hvac_mode = hvac_mode
         self.runtime.last_command_time = self._last_command_time
     async def _async_set_temperature(
@@ -1651,16 +1896,48 @@ class ClimateManager:
             data["target_temp_high"] = round_temperature_for_unit(to_ha_temp(target_temp_high, self.temperature_unit), self.temperature_unit)
         self.last_action = f"set_temperature:{data}"
         _LOGGER.debug("Applying temperature payload %s to %s", data, self.config.thermostat_entity)
-        await self.hass.services.async_call("climate", "set_temperature", data, blocking=True)
+        expected_values: dict[str, float | str | None] = {}
+        if "temperature" in data:
+            expected_values["temperature"] = from_ha_temp(
+                data["temperature"],
+                self.temperature_unit,
+            )
+        if "target_temp_low" in data:
+            expected_values["target_temp_low"] = from_ha_temp(
+                data["target_temp_low"],
+                self.temperature_unit,
+            )
+        if "target_temp_high" in data:
+            expected_values["target_temp_high"] = from_ha_temp(
+                data["target_temp_high"],
+                self.temperature_unit,
+            )
+        issued_at = now()
+        pending_command = self._register_pending_thermostat_command(
+            "set_temperature",
+            expected_values,
+            issued_at=issued_at,
+        )
+        try:
+            await self.hass.services.async_call(
+                "climate",
+                "set_temperature",
+                data,
+                blocking=True,
+            )
+        except Exception:
+            self._remove_pending_thermostat_command(pending_command)
+            raise
         self._store_command_snapshot(
             "set_temperature",
-            temperature=temperature if temperature is not None else _UNSET,
-            target_temp_low=target_temp_low if target_temp_low is not None else _UNSET,
-            target_temp_high=target_temp_high if target_temp_high is not None else _UNSET,
+            temperature=expected_values.get("temperature", _UNSET),
+            target_temp_low=expected_values.get("target_temp_low", _UNSET),
+            target_temp_high=expected_values.get("target_temp_high", _UNSET),
+            command_time=issued_at,
         )
-        self.runtime.last_commanded_temp = temperature
-        self.runtime.last_commanded_low = target_temp_low
-        self.runtime.last_commanded_high = target_temp_high
+        self.runtime.last_commanded_temp = expected_values.get("temperature")
+        self.runtime.last_commanded_low = expected_values.get("target_temp_low")
+        self.runtime.last_commanded_high = expected_values.get("target_temp_high")
         self.runtime.last_command_time = self._last_command_time
     def _update_status(self) -> None:
         if self.runtime.active_profile == PROFILE_PAUSED:
