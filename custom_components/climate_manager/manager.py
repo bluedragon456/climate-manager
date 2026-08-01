@@ -1287,16 +1287,22 @@ class ClimateManager:
         current_snapshot: dict[str, float | str | None],
     ) -> dict[str, bool]:
         """Return material user-control changes carried by one state event."""
+        previous_mode = previous_snapshot.get("hvac_mode")
         current_mode = current_snapshot.get("hvac_mode")
+        mode_changed = (
+            previous_mode is not None
+            and current_mode is not None
+            and previous_mode != current_mode
+        )
         return {
-            "hvac_mode": (
-                previous_snapshot.get("hvac_mode") is not None
-                and current_snapshot.get("hvac_mode") is not None
-                and previous_snapshot.get("hvac_mode")
-                != current_snapshot.get("hvac_mode")
-            ),
+            "hvac_mode": mode_changed,
             "temperature": (
                 current_mode != "heat_cool"
+                and not (
+                    mode_changed
+                    and current_mode == STATE_OFF
+                    and current_snapshot.get("temperature") is None
+                )
                 and not nearly_equal(
                     previous_snapshot.get("temperature"),
                     current_snapshot.get("temperature"),

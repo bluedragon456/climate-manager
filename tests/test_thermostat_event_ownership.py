@@ -330,6 +330,44 @@ class ThermostatEventOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manager.runtime.active_profile, PROFILE_SENSORS_OPEN)
         self.assertEqual(manager._pending_thermostat_commands, [])
 
+    async def test_window_off_echo_that_clears_target_is_consumed(self) -> None:
+        manager = self.make_manager(
+            mode="cool",
+            temperature=68.0,
+            window_state="on",
+        )
+        self.activate_backoff(
+            manager,
+            activated_at=self.clock.current - timedelta(minutes=1),
+        )
+        await manager._async_set_hvac_mode("off")
+
+        await self.emit_thermostat_event(
+            manager,
+            old_mode="cool",
+            old_temperature=68.0,
+            new_mode="off",
+            new_temperature=None,
+        )
+
+        self.assertFalse(manager.runtime.manual_override_active)
+        self.assertEqual(manager.runtime.active_profile, PROFILE_SENSORS_OPEN)
+        self.assertEqual(manager._pending_thermostat_commands, [])
+
+    async def test_user_off_change_that_clears_target_is_manual(self) -> None:
+        manager = self.make_manager(mode="cool", temperature=68.0)
+
+        await self.emit_thermostat_event(
+            manager,
+            old_mode="cool",
+            old_temperature=68.0,
+            new_mode="off",
+            new_temperature=None,
+        )
+
+        self.assertTrue(manager.runtime.manual_override_active)
+        self.assertEqual(manager.runtime.active_profile, PROFILE_MANUAL_OVERRIDE)
+
     async def test_exact_target_echo_is_consumed(self) -> None:
         manager = self.make_manager(mode="cool", temperature=None)
         manager.hass.states.states["input_boolean.override"] = "on"
