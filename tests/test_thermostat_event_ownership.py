@@ -401,6 +401,47 @@ class ThermostatEventOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(manager.runtime.manual_override_active)
         self.assertEqual(manager._pending_thermostat_commands, [])
 
+    async def test_mode_echo_with_restored_target_precedes_new_target(self) -> None:
+        manager = self.make_manager(mode="off", temperature=None)
+        manager.hass.states.states["input_boolean.override"] = "on"
+        manager.runtime.last_commanded_temp = 71.0
+
+        await manager._async_set_hvac_mode("cool")
+        await self.emit_thermostat_event(
+            manager,
+            old_mode="off",
+            old_temperature=None,
+            new_mode="cool",
+            new_temperature=71.0,
+        )
+        await manager._async_set_temperature(temperature=70.0)
+        await self.emit_thermostat_event(
+            manager,
+            old_mode="cool",
+            old_temperature=71.0,
+            new_mode="cool",
+            new_temperature=70.0,
+        )
+
+        self.assertFalse(manager.runtime.manual_override_active)
+        self.assertEqual(manager._pending_thermostat_commands, [])
+
+    async def test_mode_echo_with_unexpected_target_remains_manual(self) -> None:
+        manager = self.make_manager(mode="off", temperature=None)
+        manager.hass.states.states["input_boolean.override"] = "on"
+        manager.runtime.last_commanded_temp = 71.0
+        await manager._async_set_hvac_mode("cool")
+
+        await self.emit_thermostat_event(
+            manager,
+            old_mode="off",
+            old_temperature=None,
+            new_mode="cool",
+            new_temperature=65.0,
+        )
+
+        self.assertTrue(manager.runtime.manual_override_active)
+
     async def test_multiple_rapid_user_adjustments_refresh_override(self) -> None:
         manager = self.make_manager(mode="off", temperature=None)
         await self.emit_thermostat_event(

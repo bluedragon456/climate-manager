@@ -1850,9 +1850,21 @@ class ClimateManager:
         self.last_action = f"set_hvac_mode:{hvac_mode}"
         _LOGGER.debug("Applying HVAC mode %s to %s", hvac_mode, self.config.thermostat_entity)
         issued_at = now()
+        expected_values: dict[str, float | str | None] = {"hvac_mode": hvac_mode}
+        if hvac_mode != STATE_OFF:
+            if hvac_mode == "heat_cool":
+                if self.runtime.last_commanded_low is not None:
+                    expected_values["target_temp_low"] = self.runtime.last_commanded_low
+                if self.runtime.last_commanded_high is not None:
+                    expected_values["target_temp_high"] = self.runtime.last_commanded_high
+            elif self.runtime.last_commanded_temp is not None:
+                # Ecobee restores the previous target in the same event that
+                # acknowledges an off-to-active mode command. Own that exact
+                # restored value until the following target command arrives.
+                expected_values["temperature"] = self.runtime.last_commanded_temp
         pending_command = self._register_pending_thermostat_command(
             "set_hvac_mode",
-            {"hvac_mode": hvac_mode},
+            expected_values,
             issued_at=issued_at,
         )
         try:
