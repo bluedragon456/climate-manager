@@ -599,6 +599,7 @@ class ClimateManager:
             self.runtime.comfort_offset = round_to_half(comfort - base_comfort)
             self.runtime.active_comfort_target = comfort
             target_heat, target_cool = self._comfort_transition_range(comfort)
+            target_heat, target_cool = self._apply_occupied_cooling_ceiling(profile, target_heat, target_cool)
             self.runtime.transition_heat_target = target_heat
             self.runtime.transition_cool_target = target_cool
             return target_heat, target_cool
@@ -614,8 +615,40 @@ class ClimateManager:
             comfort = self._cap_effective_comfort_target(self._effective_comfort_target(base_comfort, raw_offset))
             self.runtime.comfort_offset = round_to_half(comfort - base_comfort)
             self.runtime.active_comfort_target = comfort
-            return None, comfort
+            return self._apply_occupied_cooling_ceiling(profile, None, comfort)
         return None, None
+    def _apply_occupied_cooling_ceiling(
+        self,
+        profile: str,
+        target_heat: float | None,
+        target_cool: float | None,
+    ) -> tuple[float | None, float | None]:
+        """Limit occupied Auto cooling without raising heat or bypassing safety limits."""
+        if (
+            not self.config.occupied_cooling_ceiling_enabled
+            or not self.config.smart_control_enabled
+            or self.config.hvac_preference != HVAC_PREF_AUTO
+            or profile not in {PROFILE_HOME, PROFILE_GUEST, PROFILE_PRE_ARRIVAL}
+            or target_cool is None
+        ):
+            return target_heat, target_cool
+        floor = self.config.min_cool_target
+        if target_heat is not None:
+            floor = max(floor, self.config.min_heat_target + self._minimum_auto_gap())
+        if floor > self.config.max_cool_target:
+            self._append_active_control_reason("occupied_cooling_ceiling_safety_limited")
+            return target_heat, target_cool
+        requested = self.config.occupied_cooling_ceiling
+        ceiling = clamp(requested, floor, self.config.max_cool_target)
+        if ceiling > requested:
+            self._append_active_control_reason("occupied_cooling_ceiling_safety_limited")
+        if target_cool > ceiling:
+            target_cool = ceiling
+            if target_heat is not None:
+                target_heat = min(target_heat, target_cool - self._minimum_auto_gap())
+            self._append_active_control_reason("occupied_cooling_ceiling")
+        return target_heat, target_cool
+
     def _comfort_target_for_profile(self, profile: str) -> float:
         if profile == PROFILE_SLEEP and self.config.sleep_comfort_target_override:
             return self.config.sleep_comfort_target

@@ -325,5 +325,95 @@ class ComfortOffsetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["target_temp_high"], 74.0)
 
 
+    def ceiling_manager(self, **options):
+        config = ManagerConfig(
+            "climate.test", comfort_target=71.0,
+            occupied_cooling_ceiling_enabled=True, occupied_cooling_ceiling=72.0,
+            minimum_auto_gap=5.0, max_cool_target=75.0, **options,
+        )
+        manager = self.make_manager(outdoor=53.38, config=config)
+        manager.runtime.outdoor_boost_state = OUTDOOR_BOOST_COLD
+        return manager
+
+    async def test_live_daytime_regression_sends_67_72_instead_of_70_75(self):
+        manager = self.ceiling_manager()
+        manager.hass = SimpleNamespace(services=FakeServices())
+        snapshot = ThermostatSnapshot("heat_cool", None, 70.0, 75.0, 74.0, True)
+        manager._thermostat_snapshot = lambda: snapshot
+        low, high = manager._resolve_targets(PROFILE_HOME, "heat_cool")
+        self.assertEqual((low, high), (67.0, 72.0))
+        self.assertEqual(manager.runtime.transition_cool_target, 72.0)
+        self.assertIn("occupied_cooling_ceiling", manager.runtime.active_control_reason)
+        manager.runtime.active_profile = PROFILE_HOME
+        manager.runtime.desired_hvac_mode = "heat_cool"
+        manager.runtime.target_heat, manager.runtime.target_cool = low, high
+        await manager._apply_if_needed(snapshot)
+        payload = manager.hass.services.calls[-1][2]
+        self.assertEqual((payload["target_temp_low"], payload["target_temp_high"]), (67.0, 72.0))
+
+    def test_ceiling_preserves_sleep_and_away_targets(self):
+        from custom_components.climate_manager.const import PROFILE_AWAY
+        for profile in (PROFILE_SLEEP, PROFILE_AWAY):
+            manager = self.ceiling_manager()
+            capped = manager._resolve_targets(profile, "heat_cool")
+            manager.config.occupied_cooling_ceiling_enabled = False
+            self.assertEqual(capped, manager._resolve_targets(profile, "heat_cool"))
+
+    def test_ceiling_applies_to_guest_and_pre_arrival(self):
+        from custom_components.climate_manager.const import PROFILE_GUEST, PROFILE_PRE_ARRIVAL
+        for profile in (PROFILE_HOME, PROFILE_GUEST, PROFILE_PRE_ARRIVAL):
+            manager = self.ceiling_manager()
+            self.assertEqual(manager._resolve_targets(profile, "heat_cool"), (67.0, 72.0))
+
+    def test_ceiling_preserves_explicit_preferences_and_heating(self):
+        from custom_components.climate_manager.const import HVAC_PREF_OFF
+        for preference, mode in ((HVAC_PREF_HEAT, "heat"), (HVAC_PREF_COOL, "cool"), (HVAC_PREF_OFF, None)):
+            manager = self.ceiling_manager(hvac_preference=preference)
+            capped = manager._resolve_targets(PROFILE_HOME, mode)
+            manager.config.occupied_cooling_ceiling_enabled = False
+            self.assertEqual(capped, manager._resolve_targets(PROFILE_HOME, mode))
+        manager = self.ceiling_manager()
+        capped = manager._resolve_targets(PROFILE_HOME, "heat")
+        manager.config.occupied_cooling_ceiling_enabled = False
+        self.assertEqual(capped, manager._resolve_targets(PROFILE_HOME, "heat"))
+
+    def test_ceiling_applies_to_summer_auto_cooling(self):
+        manager = self.ceiling_manager()
+        self.assertEqual(manager._resolve_targets(PROFILE_HOME, "cool"), (None, 72.0))
+
+    def test_ceiling_never_warms_existing_cooler_target(self):
+        manager = self.ceiling_manager()
+        manager._outdoor_temperature_f = lambda: 95.0
+        manager.runtime.outdoor_boost_state = OUTDOOR_BOOST_HOT
+        capped = manager._resolve_targets(PROFILE_HOME, "heat_cool")
+        manager.config.occupied_cooling_ceiling_enabled = False
+        self.assertEqual(capped, manager._resolve_targets(PROFILE_HOME, "heat_cool"))
+
+    def test_ceiling_respects_safety_floor_and_gap(self):
+        manager = self.ceiling_manager(min_cool_target=73.0)
+        low, high = manager._resolve_targets(PROFILE_HOME, "heat_cool")
+        self.assertEqual((low, high), (68.0, 73.0))
+        self.assertIn("occupied_cooling_ceiling_safety_limited", manager.runtime.active_control_reason)
+        manager = self.ceiling_manager(min_heat_target=69.0)
+        self.assertEqual(manager._resolve_targets(PROFILE_HOME, "heat_cool"), (69.0, 74.0))
+
+    def test_ceiling_does_not_change_smart_control_disabled_targets(self):
+        manager = self.ceiling_manager(smart_control_enabled=False)
+        capped = manager._resolve_targets(PROFILE_HOME, "heat_cool")
+        manager.config.occupied_cooling_ceiling_enabled = False
+        self.assertEqual(capped, manager._resolve_targets(PROFILE_HOME, "heat_cool"))
+
+    def test_ceiling_preserves_blocking_and_window_profiles(self):
+        from custom_components.climate_manager.const import (
+            PROFILE_PAUSED, PROFILE_OVERRIDE_LOCK, PROFILE_SENSORS_OPEN,
+        )
+        for profile, mode in ((PROFILE_MANUAL_OVERRIDE, None), (PROFILE_PAUSED, None),
+                              (PROFILE_OVERRIDE_LOCK, None), (PROFILE_SENSORS_OPEN, "off")):
+            manager = self.ceiling_manager()
+            capped = manager._resolve_targets(profile, mode)
+            manager.config.occupied_cooling_ceiling_enabled = False
+            self.assertEqual(capped, manager._resolve_targets(profile, mode))
+
+
 if __name__ == "__main__":
     unittest.main()

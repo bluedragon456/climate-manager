@@ -157,6 +157,43 @@ def schema_fields(result) -> dict[str, tuple[object, object]]:
 
 
 class EntityOptionsTests(unittest.IsolatedAsyncioTestCase):
+    def test_occupied_ceiling_defaults_and_config_loading(self):
+        config = integration._build_manager_config(make_hass(), make_entry(data=OLD_ENTITIES))
+        self.assertFalse(config.occupied_cooling_ceiling_enabled)
+        self.assertEqual(config.occupied_cooling_ceiling, 72.0)
+        config = integration._build_manager_config(make_hass(), make_entry(
+            data=OLD_ENTITIES,
+            options={"occupied_cooling_ceiling_enabled": True, "occupied_cooling_ceiling": 71.5},
+        ))
+        self.assertTrue(config.occupied_cooling_ceiling_enabled)
+        self.assertEqual(config.occupied_cooling_ceiling, 71.5)
+
+    def test_occupied_ceiling_temperature_conversion(self):
+        from custom_components.climate_manager.config_flow import _normalize_options, _options_to_display, _options_to_storage
+        from homeassistant.const import UnitOfTemperature
+        options = _normalize_options({"occupied_cooling_ceiling_enabled": True, "occupied_cooling_ceiling": 72.0})
+        display = _options_to_display(options, UnitOfTemperature.CELSIUS)
+        self.assertAlmostEqual(display["occupied_cooling_ceiling"], 22.0)
+        stored = _options_to_storage(display, UnitOfTemperature.CELSIUS)
+        self.assertAlmostEqual(stored["occupied_cooling_ceiling"], 71.6)
+        self.assertTrue(stored["occupied_cooling_ceiling_enabled"])
+
+    async def test_simple_comfort_ceiling_fields_and_save_preserve_other_profiles(self):
+        entry = make_entry(data=OLD_ENTITIES, options={"cool_away": 78.0, "sleep_comfort_target": 68.0})
+        flow = ClimateManagerOptionsFlow(entry)
+        flow.hass = make_hass()
+        form = await flow.async_step_simple_comfort()
+        fields = schema_fields(form)
+        self.assertIn("occupied_cooling_ceiling_enabled", fields)
+        self.assertEqual(fields["occupied_cooling_ceiling"][0].default, 72.0)
+        result = await flow.async_step_simple_comfort({
+            "occupied_cooling_ceiling_enabled": True, "occupied_cooling_ceiling": 72.0,
+        })
+        self.assertTrue(result["data"]["occupied_cooling_ceiling_enabled"])
+        self.assertEqual(result["data"]["occupied_cooling_ceiling"], 72.0)
+        self.assertEqual(result["data"]["cool_away"], 78.0)
+        self.assertEqual(result["data"]["sleep_comfort_target"], 68.0)
+
     async def test_setup_uses_thermostat_as_stable_unique_id(self) -> None:
         flow = ClimateManagerConfigFlow()
 

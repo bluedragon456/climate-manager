@@ -56,10 +56,12 @@
       },
       "simple_comfort": {
         "title": "Simple comfort",
-        "description": "Normal comfort-centered Auto settings for most users.",
+        "description": "Comfort-centered Auto settings. The optional occupied cooling ceiling limits Home, Guest, and Heading Home; Sleep and Away keep their existing behavior.",
         "data": {
           "smart_control_enabled": "Smart control enabled",
           "hvac_preference": "HVAC preference",
+          "occupied_cooling_ceiling_enabled": "Limit occupied Auto cooling target",
+          "occupied_cooling_ceiling": "Occupied Auto cooling ceiling",
           "comfort_target": "Default comfort target",
           "home_comfort_target_override": "Use a custom Home comfort target",
           "home_comfort_target": "Home comfort target when custom target is enabled",

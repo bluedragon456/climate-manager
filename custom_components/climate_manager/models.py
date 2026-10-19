@@ -58,6 +58,8 @@ class ManagerConfig:
     home_comfort_target_override: bool = False
     sleep_comfort_target_override: bool = False
     guest_comfort_target_override: bool = False
+    occupied_cooling_ceiling_enabled: bool = False
+    occupied_cooling_ceiling: float = 72.0
     transition_band: float = 6.0
     minimum_auto_gap: float = 6.0
     outdoor_cool_override_temp: float = 95.0

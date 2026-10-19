@@ -13,13 +13,14 @@ Climate Manager currently:
 - Uses comfort-centered Auto control with a default `70 F` comfort target
 - Supports Fahrenheit, Celsius, or Home Assistant system-unit temperature display/input
 - Shapes transition-season Auto ranges around outdoor hot and cold boost conditions
+- Offers an opt-in occupied Auto cooling ceiling for Home, Guest, and Heading Home
 - Preserves profile targets and outdoor curves for explicit Heat/Cool behavior
 - Detects manual thermostat setpoint and HVAC mode changes
 - Can ignore manual changes, treat them as a temporary override, or hold them until cleared
 - Exposes status sensors, control buttons, a master enable switch, and services
 - Persists runtime state across reloads and Home Assistant restarts
 
-Current integration version: `2.0.0-beta.2`
+Current integration version: `2.0.9`
 
 ## What It Creates
 
@@ -143,6 +144,8 @@ Use this first for normal comfort-centered Auto control:
 - HVAC preference: `Auto`, `Heat`, `Cool`, or `Off`
 - Default comfort target
 - Custom Home, Sleep, and Guest comfort target toggles and values
+- Limit occupied Auto cooling target (disabled by default)
+- Occupied Auto cooling ceiling (`72 F` default value; excludes Sleep and Away)
 
 ### Transition Auto And Outdoor Boost
 
@@ -274,6 +277,49 @@ Normal transition Auto is:
 - Heat target: `67 F`
 - Cool target: `73 F`
 
+### Occupied Auto Cooling Ceiling
+
+Under **Simple comfort**, enable **Limit occupied Auto cooling target** and set
+**Occupied Auto cooling ceiling** (default value `72 F`). The feature defaults
+to disabled, preserving existing installations until explicitly enabled.
+
+This limits cooling targets for Home, Guest, and Heading Home in comfort-centered
+Auto, including summer single-mode cooling. It runs after the outdoor curve,
+boost, and transition range calculations. For example, a Home range of `70 / 75`
+becomes `67 / 72` with a `72 F` ceiling and a `5 F` minimum Auto gap. The heating
+side moves down only as needed to preserve the gap. A cooler requested cooling
+target stays cooler. The effective comfort sensor still reports the curve-adjusted
+comfort target; the transition and final target sensors show the limited range.
+
+Sleep, Away, explicit Heat/Cool/Off, smart-control-disabled behavior, manual
+holds, pause, override lock, and window protection retain their existing behavior.
+This is a setpoint limit, not a guarantee of the measured room temperature.
+Existing minimum-temperature limits and the Auto gap take priority if they make
+the requested ceiling impossible; `Active control reason` then includes
+`occupied_cooling_ceiling_safety_limited`. When the ceiling lowers the cooling
+target, the reason includes `occupied_cooling_ceiling`.
+
+To enable it after upgrading:
+
+1. Open **Settings > Devices & Services > Climate Manager > Configure**.
+2. Open **Simple comfort**.
+3. Turn on **Limit occupied Auto cooling target**.
+4. Set **Occupied Auto cooling ceiling** to the warmest occupied cooling setpoint
+   you want (for example, `72 F` or `22 C`) and save.
+5. Check **Target cool**, **Transition cool target**, and the thermostat's reported
+   high target when Auto control is active. A manual override or window backoff
+   still takes priority; saving this setting does not clear either state.
+
+This ceiling is useful when sunshine or internal heat warms the house while the
+outdoor sensor still reads cold. It does not require a solar sensor and does not
+predict solar gain. The thermostat's own differential can let measured indoor
+temperature go slightly above the configured cooling setpoint before cooling starts.
+
+To undo only this change, turn off **Limit occupied Auto cooling target**. To
+roll back the code, download the previous release in HACS and restart Home
+Assistant; existing settings are retained. No integration removal or re-creation
+is required.
+
 ## Transition Auto Behavior
 
 Spring, fall, autumn, missing season, and unknown season use transition Auto. Climate Manager keeps the thermostat in `heat_cool` and adjusts the range around the comfort target.
@@ -285,10 +331,11 @@ When a comfort offset is active, Climate Manager first calculates the effective 
 | Normal transition | `67 F` | `73 F` |
 | Hot boost at `95 F` outdoor | `65 F` | `71 F` |
 | Cold boost at `55 F` outdoor | `69.5 F` | `75.5 F` |
+| Same cold boost with occupied ceiling enabled at `72 F` (default `6 F` gap) | `66 F` | `72 F` |
 
 The `Current set temp` sensor reports the active side during hot or cold boost. During normal transition it reports the heat side of the range.
 
-Sleep and Guest use the same math around the default comfort target unless their custom comfort target options are enabled.
+Sleep and Guest use the same math around the default comfort target unless their custom comfort target options are enabled. When enabled, the occupied Auto cooling ceiling additionally limits Guest cooling; Sleep is excluded.
 
 ### Comfort Target Pipeline
 
@@ -301,7 +348,8 @@ In comfort-centered `Auto`, Climate Manager uses one comfort-target pipeline bef
 5. Cap the effective comfort target between the configured minimum cool target and maximum heat target.
 6. Generate the transition heat/cool range from the capped effective comfort target.
 7. Run final thermostat safety normalization on the generated range.
-8. Send the final thermostat command if it differs meaningfully from the current thermostat state.
+8. Apply the occupied Auto cooling ceiling, if enabled for Home, Guest, or Heading Home, lowering the heating side as needed to preserve the minimum Auto gap.
+9. Send the final thermostat command if it differs meaningfully from the current thermostat state, retaining final safety normalization.
 
 The comfort target cap applies only to the effective comfort target. It does not directly clamp the transition heat or cool target. After the range is generated, final thermostat safety normalization may still adjust one or both sides so the command respects the configured heat/cool limits and the minimum required Auto spread.
 
@@ -555,6 +603,18 @@ Check:
 
 With the defaults, spring/fall transition Auto should move from `67 / 73` to `65 / 71` when hot boost activates at `95 F`. If `Outdoor boost state` stays `none`, check the outdoor temperature sensor and the configured hot boost threshold.
 
+### House Gets Too Warm During Cool, Sunny Weather
+
+Check **Target cool** and the thermostat's reported high target, rather than
+assuming **Comfort target** is the cooling threshold. Cold outdoor adjustments
+can raise the effective comfort target and transition cooling threshold. Enable
+the occupied Auto cooling ceiling under **Simple comfort** to limit that threshold
+for Home, Guest, and Heading Home without tightening Away or Sleep settings.
+If the ceiling is not active, check the active profile, HVAC preference, master
+switch, manual override, window protection, and the configured minimum limits/gap.
+`occupied_cooling_ceiling_safety_limited` means a safety limit or the Auto gap
+prevents the requested ceiling; review those settings before changing them.
+
 ### Heating Is Not Responding To Colder Outdoor Temperatures
 
 Check:
@@ -611,7 +671,13 @@ If HVAC preference is `Auto`, check the season entity state and `Active control 
 
 ## Migration Notes
 
-Existing installs keep their current option values. New comfort-centered options are added with defaults:
+Existing installs keep their current option values. Version `2.0.9` adds
+`occupied_cooling_ceiling_enabled` (default `false`) and
+`occupied_cooling_ceiling` (default `72 F`). The new options are available under
+**Simple comfort** after installation and a Home Assistant restart. Existing
+installs must explicitly enable the feature; no config-entry migration is required.
+
+Comfort-centered options retain these defaults:
 
 - `Comfort target`: `70 F` fallback
 - `Home comfort target`: `70 F`
