@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.10 - 2026-10-30
+
+- Added an opt-in fall Auto heating floor based on each occupied profile's
+  unadjusted comfort target, including Sleep. Outdoor calculations may raise
+  targets above the floor. Away and other seasons retain existing behavior.
+- Fall cooling ceiling and maximum now make room for the calculated heating
+  target plus the Auto gap, subject to thermostat limits and heating maximum.
+- Added an Effective cooling limit sensor for seasonal door-warning thresholds,
+  available even when manual overrides or open doors block normal control.
+- Existing installations retain their behavior until the fall option is enabled.
+
 ## 2.0.9 - 2026-10-19
 
 ### Occupied Auto cooling ceiling

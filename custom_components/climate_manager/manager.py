@@ -598,7 +598,7 @@ class ClimateManager:
             comfort = self._cap_effective_comfort_target(self._effective_comfort_target(base_comfort, raw_offset))
             self.runtime.comfort_offset = round_to_half(comfort - base_comfort)
             self.runtime.active_comfort_target = comfort
-            target_heat, target_cool = self._comfort_transition_range(comfort)
+            target_heat, target_cool = self._comfort_transition_range(comfort, profile=profile)
             target_heat, target_cool = self._apply_occupied_cooling_ceiling(profile, target_heat, target_cool)
             self.runtime.transition_heat_target = target_heat
             self.runtime.transition_cool_target = target_cool
@@ -617,6 +617,48 @@ class ClimateManager:
             self.runtime.active_comfort_target = comfort
             return self._apply_occupied_cooling_ceiling(profile, None, comfort)
         return None, None
+    def _fall_comfort_limits(self, profile: str | None) -> tuple[float | None, float]:
+        """Return the fall heating floor and cooling maximum for normal Auto only.
+
+        Profile comfort remains an input to the outdoor curve; in fall it also
+        supplies a lower bound. Raising the cooling maximum only makes room for
+        the calculated heating target plus the Auto gap. The thermostat's
+        advertised maximum wins.
+        """
+        maximum = self.config.max_cool_target
+        if (
+            not self.config.fall_comfort_floor_enabled
+            or not self.config.smart_control_enabled
+            or self.config.hvac_preference != HVAC_PREF_AUTO
+            or profile not in {PROFILE_HOME, PROFILE_GUEST, PROFILE_PRE_ARRIVAL, PROFILE_SLEEP}
+            or self._current_season() != SEASON_FALL
+        ):
+            return None, maximum
+        floor = max(self.config.min_heat_target, self._comfort_target_for_profile(profile))
+        floor = min(floor, self.config.max_heat_target)
+        heat_offset, cool_offset = self._resolve_comfort_curve_offsets(profile, self._comfort_target_for_profile(profile))
+        offset = self._resolve_active_comfort_offset("heat_cool", heat_offset, cool_offset)
+        offset += self._outdoor_boost_comfort_offset(self.runtime.outdoor_boost_state)
+        comfort = round_to_half(clamp(
+            self._effective_comfort_target(self._comfort_target_for_profile(profile), offset),
+            self.config.min_cool_target,
+            self.config.max_heat_target,
+        ))
+        calculated_heat = comfort - max(self.config.transition_band, self._minimum_auto_gap()) / 2
+        required_heat = min(self.config.max_heat_target, max(floor, calculated_heat))
+        maximum = max(maximum, required_heat + self._minimum_auto_gap())
+        thermostat = self.hass.states.get(self.config.thermostat_entity)
+        device_max = None if thermostat is None else thermostat.attributes.get("max_temp")
+        if isinstance(device_max, (int, float)):
+            maximum = min(maximum, from_ha_temp(device_max, self.temperature_unit))
+        floor = min(floor, maximum - self._minimum_auto_gap())
+        return floor, maximum
+
+    @property
+    def effective_cooling_limit(self) -> float:
+        """Seasonal policy limit, available even while doors block HVAC control."""
+        return self._fall_comfort_limits(self.underlying_occupancy_profile)[1]
+
     def _apply_occupied_cooling_ceiling(
         self,
         profile: str,
@@ -632,14 +674,19 @@ class ClimateManager:
             or target_cool is None
         ):
             return target_heat, target_cool
+        heat_floor, maximum = self._fall_comfort_limits(profile)
         floor = self.config.min_cool_target
         if target_heat is not None:
-            floor = max(floor, self.config.min_heat_target + self._minimum_auto_gap())
-        if floor > self.config.max_cool_target:
+            floor = max(floor, (heat_floor if heat_floor is not None else self.config.min_heat_target) + self._minimum_auto_gap())
+        if floor > maximum:
             self._append_active_control_reason("occupied_cooling_ceiling_safety_limited")
             return target_heat, target_cool
         requested = self.config.occupied_cooling_ceiling
-        ceiling = clamp(requested, floor, self.config.max_cool_target)
+        if heat_floor is not None and target_heat is not None:
+            requested = max(requested, target_heat + self._minimum_auto_gap())
+            if requested > self.config.occupied_cooling_ceiling:
+                self._append_active_control_reason("fall_cooling_limit_adjusted")
+        ceiling = clamp(requested, floor, maximum)
         if ceiling > requested:
             self._append_active_control_reason("occupied_cooling_ceiling_safety_limited")
         if target_cool > ceiling:
@@ -684,13 +731,15 @@ class ClimateManager:
     def _comfort_transition_range(
         self,
         comfort: float,
+        *,
+        profile: str | None = None,
     ) -> tuple[float, float]:
         minimum_gap = self._minimum_auto_gap()
         band = max(self.config.transition_band, minimum_gap)
         half_band = band / 2
         target_heat = comfort - half_band
         target_cool = comfort + half_band
-        return self.normalize_heat_cool_range(target_heat, target_cool, update_reason=True)
+        return self.normalize_heat_cool_range(target_heat, target_cool, update_reason=True, profile=profile)
     def _minimum_auto_gap(self) -> float:
         return max(MIN_HEAT_COOL_SPREAD, self.config.minimum_auto_gap)
     def _append_active_control_reason(self, reason: str) -> None:
@@ -1172,6 +1221,7 @@ class ClimateManager:
         target_temp_high: float | None,
         *,
         update_reason: bool = False,
+        profile: str | None = None,
     ) -> tuple[float | None, float | None]:
         if target_temp_low is None or target_temp_high is None:
             return target_temp_low, target_temp_high
@@ -1179,7 +1229,13 @@ class ClimateManager:
         min_heat = self.config.min_heat_target
         max_heat = self.config.max_heat_target
         min_cool = self.config.min_cool_target
-        max_cool = self.config.max_cool_target
+        fall_floor, max_cool = self._fall_comfort_limits(profile or self.runtime.active_profile)
+        if fall_floor is not None:
+            min_heat = max(min_heat, fall_floor)
+            if update_reason:
+                self._append_active_control_reason("fall_comfort_floor")
+                if fall_floor < self._comfort_target_for_profile(profile or self.runtime.active_profile):
+                    self._append_active_control_reason("fall_comfort_floor_safety_limited")
         if min_heat > max_heat or min_cool > max_cool:
             if update_reason:
                 self._append_active_control_reason("range_limits_invalid")

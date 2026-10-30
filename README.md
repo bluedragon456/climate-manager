@@ -283,7 +283,7 @@ Under **Simple comfort**, enable **Limit occupied Auto cooling target** and set
 **Occupied Auto cooling ceiling** (default value `72 F`). The feature defaults
 to disabled, preserving existing installations until explicitly enabled.
 
-This limits cooling targets for Home, Guest, and Heading Home in comfort-centered
+Unless the fall floor option below is enabled, this limits cooling targets for Home, Guest, and Heading Home in comfort-centered
 Auto, including summer single-mode cooling. It runs after the outdoor curve,
 boost, and transition range calculations. For example, a Home range of `70 / 75`
 becomes `67 / 72` with a `72 F` ceiling and a `5 F` minimum Auto gap. The heating
@@ -299,7 +299,37 @@ the requested ceiling impossible; `Active control reason` then includes
 `occupied_cooling_ceiling_safety_limited`. When the ceiling lowers the cooling
 target, the reason includes `occupied_cooling_ceiling`.
 
-To enable it after upgrading:
+### Fall heating floors
+
+Under **Simple comfort**, **Use comfort targets as fall heating floors** is an
+opt-in setting (disabled by default). When the configured season source reports
+`fall` or `autumn`, Home, Guest, Heading Home, and Sleep use their unadjusted
+profile comfort values as minimum heating targets. The outdoor curve and boost
+still calculate the targets; a floor does not force a fixed setpoint.
+
+For example, Home comfort `71 F` and custom Sleep comfort `68 F` mean heating
+cannot be calculated below `71 F` while home or `68 F` during Sleep. Colder
+weather can raise either target. Away keeps its existing safety settings.
+
+In fall, the occupied cooling ceiling and maximum cooling limit expand only as
+needed to preserve the calculated heating target plus the minimum Auto gap.
+With a `5 F` gap, a `71 F` heating target requires at least `76 F` cooling; a
+`71.5 F` heating target requires `76.5 F`. The configured heating maximum and
+thermostat's advertised maximum still take priority; an impossible floor reports
+`fall_comfort_floor_safety_limited`. The configured cooling maximum is not
+rewritten, and other seasons retain their previous behavior.
+
+**Effective cooling limit** exposes the current seasonal maximum, including
+during manual override or window backoff, so door notifications can compare
+indoor temperature against that sensor rather than a fixed `75 F`. It represents
+policy, not a command to run HVAC while a door is open. Manual overrides, explicit
+Heat/Cool/Off, pause, override lock, and window safety retain priority.
+
+Disable **Use comfort targets as fall heating floors** to restore the previous
+Auto calculations. Thermostat hysteresis and room variation can still cause
+measured temperatures to dip below a heating setpoint.
+
+To enable the occupied cooling ceiling after upgrading:
 
 1. Open **Settings > Devices & Services > Climate Manager > Configure**.
 2. Open **Simple comfort**.

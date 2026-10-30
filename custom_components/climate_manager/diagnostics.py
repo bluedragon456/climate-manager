@@ -48,6 +48,7 @@ async def async_get_config_entry_diagnostics(
             "config": {**entry.data, **entry.options},
             "runtime": asdict(manager.runtime),
             "hvac": {
+                "effective_cooling_limit": manager.effective_cooling_limit,
                 "calculated_target_heat": manager.runtime.target_heat,
                 "calculated_target_cool": manager.runtime.target_cool,
                 "last_commanded_mode": manager.runtime.last_commanded_hvac_mode,

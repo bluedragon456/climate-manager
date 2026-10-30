@@ -59,6 +59,7 @@ class ManagerConfig:
     sleep_comfort_target_override: bool = False
     guest_comfort_target_override: bool = False
     occupied_cooling_ceiling_enabled: bool = False
+    fall_comfort_floor_enabled: bool = False
     occupied_cooling_ceiling: float = 72.0
     transition_band: float = 6.0
     minimum_auto_gap: float = 6.0

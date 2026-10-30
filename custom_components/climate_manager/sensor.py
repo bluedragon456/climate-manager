@@ -67,6 +67,14 @@ def _humanize_last_action(manager: ClimateManager) -> str | None:
 
 SENSORS: tuple[ClimateManagerSensorDescription, ...] = (
     ClimateManagerSensorDescription(
+        key="effective_cooling_limit",
+        translation_key="effective_cooling_limit",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        temperature_kind="absolute",
+        value_fn=lambda manager: manager.effective_cooling_limit,
+    ),
+    ClimateManagerSensorDescription(
         key="active_profile",
         translation_key="active_profile",
         value_fn=lambda manager: manager.runtime.active_profile,

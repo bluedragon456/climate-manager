@@ -131,6 +131,7 @@ def _build_manager_config(hass: HomeAssistant, entry: ConfigEntry) -> ManagerCon
         cool_curve_weight_guest=raw["cool_curve_weight_guest"],
         cool_curve_weight_away=raw["cool_curve_weight_away"],
         occupied_cooling_ceiling_enabled=raw["occupied_cooling_ceiling_enabled"],
+        fall_comfort_floor_enabled=raw["fall_comfort_floor_enabled"],
         occupied_cooling_ceiling=raw["occupied_cooling_ceiling"],
         comfort_target=raw["comfort_target"],
         home_comfort_target=raw["home_comfort_target"],

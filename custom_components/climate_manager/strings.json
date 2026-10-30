@@ -56,10 +56,11 @@
       },
       "simple_comfort": {
         "title": "Simple comfort",
-        "description": "Comfort-centered Auto settings. The optional occupied cooling ceiling limits Home, Guest, and Heading Home; Sleep and Away keep their existing behavior.",
+        "description": "Comfort-centered Auto settings. Optional fall floors keep Home, Guest, Heading Home and Sleep heating at or above their profile comfort values. Targets can rise with the outdoor curve. In fall the cooling ceiling and maximum expand only as needed for the heating target plus the Auto gap, within thermostat limits. Away and other seasons retain their behavior.",
         "data": {
           "smart_control_enabled": "Smart control enabled",
           "hvac_preference": "HVAC preference",
+          "fall_comfort_floor_enabled": "Use comfort targets as fall heating floors",
           "occupied_cooling_ceiling_enabled": "Limit occupied Auto cooling target",
           "occupied_cooling_ceiling": "Occupied Auto cooling ceiling",
           "comfort_target": "Default comfort target",
@@ -216,6 +217,9 @@
   },
   "entity": {
     "sensor": {
+      "effective_cooling_limit": {
+        "name": "Effective cooling limit"
+      },
       "active_profile": {"name": "Active profile"},
       "desired_hvac_mode": {"name": "Desired HVAC mode"},
       "current_set_temp": {"name": "Current set temp"},
