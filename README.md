@@ -20,7 +20,7 @@ Climate Manager currently:
 - Exposes status sensors, control buttons, a master enable switch, and services
 - Persists runtime state across reloads and Home Assistant restarts
 
-Current integration version: `2.0.9`
+Current integration version: `2.0.10`
 
 ## What It Creates
 
@@ -33,6 +33,7 @@ For each config entry, Climate Manager creates:
 - `Current set temp`
 - `Target heat`
 - `Target cool`
+- `Effective cooling limit`
 - `Comfort offset`
 - `Comfort target`
 - `Transition heat target`
@@ -146,6 +147,7 @@ Use this first for normal comfort-centered Auto control:
 - Custom Home, Sleep, and Guest comfort target toggles and values
 - Limit occupied Auto cooling target (disabled by default)
 - Occupied Auto cooling ceiling (`72 F` default value; excludes Sleep and Away)
+- Use comfort targets as fall heating floors (disabled by default; includes Sleep)
 
 ### Transition Auto And Outdoor Boost
 
@@ -700,6 +702,11 @@ logger:
 If HVAC preference is `Auto`, check the season entity state and `Active control reason`. `winter` maps to `heat`, `summer` maps to `cool`, and `spring`, `fall`, `autumn`, or any other value uses transition `heat_cool`.
 
 ## Migration Notes
+
+Version `2.0.10` adds `fall_comfort_floor_enabled` (default `false`) and the
+**Effective cooling limit** sensor. Enable the fall option under **Simple comfort**
+after installing and restarting. Existing profile values become heating floors
+only during fall Auto control; no stored temperature values are rewritten.
 
 Existing installs keep their current option values. Version `2.0.9` adds
 `occupied_cooling_ceiling_enabled` (default `false`) and
